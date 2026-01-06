@@ -1,0 +1,59 @@
+[workspace]
+resolver = "2"
+members = [
+    "smesh-core",
+    "smesh-runtime", 
+    "smesh-agent",
+    "smesh-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["SMESH Contributors"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/smesh-protocol/smesh-rust"
+description = "SMESH - Plant-inspired signal diffusion protocol for distributed coordination"
+
+[workspace.dependencies]
+# Core
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bincode = "1.3"
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Async
+tokio = { version = "1.35", features = ["full"] }
+futures = "0.3"
+async-trait = "0.1"
+
+# Crypto
+sha2 = "0.10"
+rand = "0.8"
+uuid = { version = "1.6", features = ["v4", "serde"] }
+
+# Networking
+quinn = "0.11"
+rustls = "0.23"
+
+# Math/Stats
+nalgebra = "0.32"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# CLI
+clap = { version = "4.4", features = ["derive"] }
+
+# HTTP (for Ollama)
+reqwest = { version = "0.11", features = ["json"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"

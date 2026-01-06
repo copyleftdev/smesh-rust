@@ -1,0 +1,20 @@
+[package]
+name = "smesh-runtime"
+version.workspace = true
+edition.workspace = true
+description = "Async runtime and networking for SMESH protocol"
+
+[dependencies]
+smesh-core = { path = "../smesh-core" }
+tokio = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+quinn = { workspace = true }
+rustls = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+bincode = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }
+rcgen = "0.13"
