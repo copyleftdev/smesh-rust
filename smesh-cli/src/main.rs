@@ -2,6 +2,7 @@
 
 use clap::{Parser, Subcommand};
 use anyhow::Result;
+use std::path::PathBuf;
 use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 
@@ -13,6 +14,9 @@ use smesh_agent::{
     AgentCoordinator, CoordinatorConfig, TaskDefinition,
     AgentRole, benchmark_backend, print_comparison,
 };
+
+mod review;
+mod threat;
 
 #[derive(Parser)]
 #[command(name = "smesh")]
@@ -93,6 +97,32 @@ enum Commands {
         #[arg(short, long)]
         prompt: Option<String>,
     },
+    
+    /// Run SMESH-coordinated code review on a repository
+    Review {
+        /// Path to the repository to review
+        #[arg(short, long)]
+        path: PathBuf,
+        
+        /// Ollama model to use for review
+        #[arg(short, long, default_value = "qwen2.5-coder:7b")]
+        model: String,
+    },
+    
+    /// Analyze threat patterns from security payload repositories
+    Threat {
+        /// Path to the payload repository (e.g., PayloadsAllTheThings)
+        #[arg(short, long)]
+        path: PathBuf,
+        
+        /// Ollama model to use
+        #[arg(short, long, default_value = "qwen2.5-coder:7b")]
+        model: String,
+        
+        /// Maximum files to analyze (to limit token usage)
+        #[arg(short, long, default_value = "10")]
+        limit: usize,
+    },
 }
 
 fn setup_logging(verbose: bool) {
@@ -118,6 +148,12 @@ async fn main() -> Result<()> {
         Commands::Bench { signals, nodes } => cmd_bench(signals, nodes).await,
         Commands::Compare { ollama_model, claude_model, prompt } => {
             cmd_compare(&ollama_model, &claude_model, prompt.as_deref()).await
+        }
+        Commands::Review { path, model } => {
+            review::run_review(&path, &model).await.map(|_| ())
+        }
+        Commands::Threat { path, model, limit } => {
+            threat::run_threat_analysis(&path, &model, limit).await.map(|_| ())
         }
     }
 }

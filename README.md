@@ -152,7 +152,48 @@ smesh sim                 # Run signal simulation
 smesh agents --demo       # LLM agent coordination demo
 smesh compare             # Benchmark Ollama vs Claude
 smesh bench               # Signal processing benchmarks
+smesh review --path ./repo    # SMESH-coordinated code review
+smesh threat --path ./payloads --limit 10  # Threat pattern analysis
 ```
+
+---
+
+## 🔍 Code Review (NEW)
+
+Multi-agent code review using signal diffusion:
+
+```bash
+cargo run --bin smesh -- review --path ./some-repo --model qwen2.5-coder:7b
+```
+
+| Agent | Focus |
+|-------|-------|
+| **Security** | Unsafe code, vulnerabilities, input validation |
+| **Performance** | Allocations, algorithms, hot paths |
+| **Style** | Idiomatic Rust, patterns, organization |
+| **Documentation** | Doc comments, examples, clarity |
+
+Agents emit findings as signals → related reviewers reinforce → consensus emerges.
+
+---
+
+## 🔥 Threat Intelligence (NEW)
+
+Analyze security payload repositories (e.g., PayloadsAllTheThings):
+
+```bash
+cargo run --bin smesh -- threat \
+  --path ./reference/PayloadsAllTheThings \
+  --model qwen2.5-coder:7b \
+  --limit 20
+```
+
+Automatically categorizes threats: **Injection**, **XSS**, **Deserialization**, **Traversal**, **SSRF**, etc.
+
+Extracts:
+- Attack patterns and example payloads
+- Severity classification (CRITICAL/HIGH/MEDIUM/LOW)
+- Mitigation recommendations
 
 ---
 

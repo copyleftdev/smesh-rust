@@ -46,3 +46,6 @@ tarpaulin-report.html
 *.tmp
 *.bak
 *.orig
+
+# Reference repos (cloned for analysis, not tracked)
+reference/
