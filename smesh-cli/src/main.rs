@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 
@@ -14,6 +14,7 @@ use smesh_core::{Network, NetworkTopology, Signal, SignalType};
 use smesh_runtime::{RuntimeConfig, SmeshRuntime};
 
 mod review;
+mod swarm;
 mod threat;
 
 #[derive(Parser)]
@@ -121,6 +122,25 @@ enum Commands {
         #[arg(short, long, default_value = "10")]
         limit: usize,
     },
+
+    /// Run multi-agent vulnerability swarm scan (Claude-powered)
+    Swarm {
+        /// Path to scan for vulnerabilities
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+
+        /// Maximum files to analyze
+        #[arg(long, default_value = "50")]
+        max_files: usize,
+
+        /// Output format (text, json, sarif)
+        #[arg(short, long, default_value = "text")]
+        format: String,
+
+        /// Consensus threshold (agents that must agree)
+        #[arg(long, default_value = "3")]
+        consensus: u32,
+    },
 }
 
 fn setup_logging(verbose: bool) {
@@ -163,7 +183,53 @@ async fn main() -> Result<()> {
                 .await
                 .map(|_| ())
         }
+        Commands::Swarm {
+            path,
+            max_files,
+            format,
+            consensus,
+        } => cmd_swarm(&path, max_files, &format, consensus).await,
     }
+}
+
+async fn cmd_swarm(path: &Path, max_files: usize, format: &str, consensus: u32) -> Result<()> {
+    use swarm::{
+        print_results, results_to_json, OutputFormat, VulnSwarmConfig, VulnSwarmCoordinator,
+    };
+
+    println!("╔═══════════════════════════════════════╗");
+    println!("║      SMESH Vulnerability Swarm        ║");
+    println!("╚═══════════════════════════════════════╝");
+    println!();
+
+    let config = VulnSwarmConfig::new(path.to_path_buf())
+        .with_max_files(max_files)
+        .with_output_format(OutputFormat::from_str(format))
+        .with_consensus_threshold(consensus);
+
+    let mut coordinator =
+        VulnSwarmCoordinator::new(config).map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    let result = coordinator
+        .run()
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    match OutputFormat::from_str(format) {
+        OutputFormat::Json => {
+            println!("{}", results_to_json(&result));
+        }
+        OutputFormat::Sarif => {
+            // TODO: Implement SARIF output
+            println!("SARIF output not yet implemented. Using JSON:");
+            println!("{}", results_to_json(&result));
+        }
+        OutputFormat::Text => {
+            print_results(&result, false);
+        }
+    }
+
+    Ok(())
 }
 
 async fn cmd_status() -> Result<()> {
