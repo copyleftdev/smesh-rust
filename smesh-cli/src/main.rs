@@ -305,8 +305,8 @@ async fn cmd_agents(n_agents: usize, model: &str, demo: bool) -> Result<()> {
         max_ticks: 50,
         tick_interval_ms: 100,
     };
-    
-    let mut coordinator = AgentCoordinator::new(config);
+
+    let mut coordinator = AgentCoordinator::with_ollama(config, &model);
     
     // Define demo tasks
     let tasks = if demo {

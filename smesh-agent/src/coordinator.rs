@@ -1,12 +1,21 @@
 //! Agent coordinator - manages multiple LLM agents via SMESH
+//!
+//! Provides backend factory pattern for creating agents with different
+//! LLM backends (Ollama, Claude, etc.).
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tracing::{info, debug, warn};
 
 use smesh_core::{Signal, SignalType, Field, NodeId};
 use crate::agent::{LlmAgent, AgentConfig, AgentRole, AgentTask, TaskType, TaskStatus, AgentAction};
-use crate::ollama::OllamaConfig;
+use crate::backend::LlmBackend;
+use crate::ollama::{OllamaClient, OllamaConfig};
+use crate::claude::{ClaudeClient, ClaudeConfig};
+
+/// Factory function type for creating backends
+pub type BackendFactory = Box<dyn Fn() -> Arc<dyn LlmBackend> + Send + Sync>;
 
 /// Configuration for the agent coordinator
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,32 +79,30 @@ pub struct AgentCoordinator {
 }
 
 impl AgentCoordinator {
-    /// Create a new coordinator
-    pub fn new(config: CoordinatorConfig) -> Self {
+    /// Create a new coordinator with a custom backend factory
+    pub fn new(config: CoordinatorConfig, backend_factory: BackendFactory) -> Self {
         let mut agents = HashMap::new();
-        
+
         // Create agents
         for i in 0..config.n_agents {
             let role = config.roles[i % config.roles.len()];
             let name = format!("{:?}-{}", role, i + 1);
-            
+
             let agent_config = AgentConfig {
                 name: name.clone(),
                 role,
-                ollama: OllamaConfig {
-                    model: config.model.clone(),
-                    ..Default::default()
-                },
+                ollama: None,
                 ..Default::default()
             };
-            
-            let agent = LlmAgent::new(agent_config);
+
+            let backend = backend_factory();
+            let agent = LlmAgent::new(agent_config, backend);
             let node_id = agent.node_id().to_string();
-            
+
             info!("Created agent: {} ({})", name, node_id);
             agents.insert(node_id, agent);
         }
-        
+
         Self {
             config,
             agents,
@@ -104,6 +111,27 @@ impl AgentCoordinator {
             completed: Vec::new(),
             tick: 0,
         }
+    }
+
+    /// Create a coordinator with Ollama backend (backward compatibility)
+    pub fn with_ollama(config: CoordinatorConfig, model: &str) -> Self {
+        let model = model.to_string();
+        let factory: BackendFactory = Box::new(move || {
+            let ollama_config = OllamaConfig {
+                model: model.clone(),
+                ..Default::default()
+            };
+            Arc::new(OllamaClient::new(ollama_config))
+        });
+        Self::new(config, factory)
+    }
+
+    /// Create a coordinator with Claude backend
+    pub fn with_claude(config: CoordinatorConfig, claude_config: ClaudeConfig) -> Self {
+        let factory: BackendFactory = Box::new(move || {
+            Arc::new(ClaudeClient::new(claude_config.clone()))
+        });
+        Self::new(config, factory)
     }
     
     /// Add a task to be coordinated
@@ -206,18 +234,18 @@ impl AgentCoordinator {
             for idx in task_indices {
                 let task = &mut agent.current_tasks[idx];
                 let task_id = task.id.clone();
-                
-                // Execute task using the ollama client directly
+
+                // Execute task using the backend
                 let prompt = format!(
                     "Execute this task:\n\nType: {}\nDescription: {}\nPriority: {:.1}\n\nProvide your work result. Be concise but complete.",
                     task.task_type.as_str(),
                     task.description,
                     task.priority
                 );
-                
+
                 let system = agent.config.role.system_prompt(&agent.config.name);
-                
-                match agent.ollama.generate(&prompt, Some(&system)).await {
+
+                match agent.backend().generate_with_system(&prompt, &system).await {
                     Ok(result) => {
                         agent.llm_calls += 1;
                         agent.current_tasks[idx].status = TaskStatus::Completed;
@@ -315,28 +343,29 @@ pub struct TickResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_coordinator_creation() {
         let config = CoordinatorConfig {
             n_agents: 3,
             ..Default::default()
         };
-        
-        let coordinator = AgentCoordinator::new(config);
+
+        let coordinator = AgentCoordinator::with_ollama(config, "test-model");
         assert_eq!(coordinator.agents.len(), 3);
     }
-    
+
     #[test]
     fn test_add_task() {
-        let mut coordinator = AgentCoordinator::new(CoordinatorConfig::default());
-        
+        let mut coordinator =
+            AgentCoordinator::with_ollama(CoordinatorConfig::default(), "test-model");
+
         let task_id = coordinator.add_task(TaskDefinition {
             task_type: "code_review".to_string(),
             description: "Review code".to_string(),
             priority: 0.8,
         });
-        
+
         assert!(!task_id.is_empty());
         assert_eq!(coordinator.tasks.len(), 1);
         assert_eq!(coordinator.field.signals.len(), 1);

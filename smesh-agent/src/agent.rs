@@ -1,11 +1,16 @@
 //! LLM-powered agent for SMESH
+//!
+//! Provides generic backend support for LLM agents, allowing use of
+//! Ollama, Claude, or other LLM backends.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tracing::{info, debug};
 
 use smesh_core::{Node, Signal};
-use crate::ollama::{OllamaClient, OllamaConfig, OllamaError};
+use crate::backend::{LlmBackend, LlmError};
+use crate::ollama::{OllamaClient, OllamaConfig};
 
 /// Agent roles that determine skills and behavior
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,12 +127,13 @@ pub struct AgentConfig {
     pub name: String,
     /// Agent role
     pub role: AgentRole,
-    /// Ollama configuration
-    pub ollama: OllamaConfig,
     /// Maximum concurrent tasks
     pub max_concurrent_tasks: usize,
     /// Minimum affinity to claim a task
     pub affinity_threshold: f64,
+    /// Ollama configuration (for backward compatibility)
+    #[serde(default)]
+    pub ollama: Option<OllamaConfig>,
 }
 
 impl Default for AgentConfig {
@@ -135,10 +141,33 @@ impl Default for AgentConfig {
         Self {
             name: "Agent".to_string(),
             role: AgentRole::General,
-            ollama: OllamaConfig::default(),
             max_concurrent_tasks: 3,
             affinity_threshold: 0.5,
+            ollama: Some(OllamaConfig::default()),
         }
+    }
+}
+
+impl AgentConfig {
+    /// Create a new agent config with a name and role
+    pub fn new(name: impl Into<String>, role: AgentRole) -> Self {
+        Self {
+            name: name.into(),
+            role,
+            ..Default::default()
+        }
+    }
+
+    /// Set maximum concurrent tasks
+    pub fn with_max_concurrent(mut self, max: usize) -> Self {
+        self.max_concurrent_tasks = max;
+        self
+    }
+
+    /// Set affinity threshold
+    pub fn with_affinity_threshold(mut self, threshold: f64) -> Self {
+        self.affinity_threshold = threshold;
+        self
     }
 }
 
@@ -167,8 +196,8 @@ pub struct LlmAgent {
     pub node: Node,
     /// Agent configuration
     pub config: AgentConfig,
-    /// Ollama client
-    pub ollama: OllamaClient,
+    /// LLM backend (generic)
+    backend: Arc<dyn LlmBackend>,
     /// Current tasks
     pub current_tasks: Vec<AgentTask>,
     /// Task queue (claimed but not started)
@@ -180,20 +209,37 @@ pub struct LlmAgent {
 }
 
 impl LlmAgent {
-    /// Create a new LLM agent
-    pub fn new(config: AgentConfig) -> Self {
+    /// Create a new LLM agent with a specific backend
+    pub fn new(config: AgentConfig, backend: Arc<dyn LlmBackend>) -> Self {
         let node = Node::new();
-        let ollama = OllamaClient::new(config.ollama.clone());
-        
+
         Self {
             node,
             config,
-            ollama,
+            backend,
             current_tasks: Vec::new(),
             task_queue: Vec::new(),
             results: Vec::new(),
             llm_calls: 0,
         }
+    }
+
+    /// Create a new LLM agent with Ollama backend (backward compatibility)
+    pub fn with_ollama(config: AgentConfig) -> Self {
+        let ollama_config = config.ollama.as_ref().cloned().unwrap_or_default();
+        let backend = Arc::new(OllamaClient::new(ollama_config));
+        Self::new(config, backend)
+    }
+
+    /// Create a new LLM agent with a specific Ollama configuration
+    pub fn with_ollama_config(config: AgentConfig, ollama_config: OllamaConfig) -> Self {
+        let backend = Arc::new(OllamaClient::new(ollama_config));
+        Self::new(config, backend)
+    }
+
+    /// Get a reference to the backend
+    pub fn backend(&self) -> &dyn LlmBackend {
+        self.backend.as_ref()
     }
     
     /// Get agent's node ID
@@ -231,7 +277,7 @@ impl LlmAgent {
     }
     
     /// Execute a task using the LLM
-    pub async fn execute_task(&mut self, task: &mut AgentTask) -> Result<String, OllamaError> {
+    pub async fn execute_task(&mut self, task: &mut AgentTask) -> Result<String, LlmError> {
         let prompt = format!(
             "Execute this task:\n\n\
              Type: {}\n\
@@ -242,19 +288,19 @@ impl LlmAgent {
             task.description,
             task.priority
         );
-        
+
         let system = self.config.role.system_prompt(&self.config.name);
-        
+
         debug!("Agent {} executing task {}", self.config.name, task.id);
-        
-        let result = self.ollama.generate(&prompt, Some(&system)).await?;
+
+        let result = self.backend.generate_with_system(&prompt, &system).await?;
         self.llm_calls += 1;
-        
+
         task.status = TaskStatus::Completed;
         task.result = Some(result.clone());
-        
+
         info!("Agent {} completed task {}", self.config.name, task.id);
-        
+
         Ok(result)
     }
     
@@ -349,7 +395,7 @@ pub enum AgentAction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_agent_creation() {
         let config = AgentConfig {
@@ -357,37 +403,50 @@ mod tests {
             role: AgentRole::Coder,
             ..Default::default()
         };
-        
-        let agent = LlmAgent::new(config);
-        
+
+        let agent = LlmAgent::with_ollama(config);
+
         assert_eq!(agent.name(), "TestAgent");
         assert!(agent.skill(TaskType::CodeWrite) > 0.9);
         assert!(agent.has_capacity());
     }
-    
+
     #[test]
     fn test_should_claim() {
         let config = AgentConfig {
+            name: "Coder".to_string(),
             role: AgentRole::Coder,
-            affinity_threshold: 0.6,  // Higher threshold
+            affinity_threshold: 0.6, // Higher threshold
             ..Default::default()
         };
-        
-        let agent = LlmAgent::new(config);
-        
+
+        let agent = LlmAgent::with_ollama(config);
+
         // Coder should claim code tasks (skill 0.95 > 0.6)
         assert!(agent.should_claim(TaskType::CodeWrite, 0.5).is_some());
-        
+
         // Coder should not claim documentation (skill 0.5 < 0.6 threshold)
         assert!(agent.should_claim(TaskType::Documentation, 0.5).is_none());
     }
-    
+
     #[test]
     fn test_role_skills() {
         let coder_skills = AgentRole::Coder.skills();
         let analyst_skills = AgentRole::Analyst.skills();
-        
+
         assert!(coder_skills[&TaskType::CodeWrite] > analyst_skills[&TaskType::CodeWrite]);
         assert!(analyst_skills[&TaskType::Analysis] > coder_skills[&TaskType::Analysis]);
+    }
+
+    #[test]
+    fn test_agent_config_builder() {
+        let config = AgentConfig::new("TestAgent", AgentRole::Analyst)
+            .with_max_concurrent(5)
+            .with_affinity_threshold(0.8);
+
+        assert_eq!(config.name, "TestAgent");
+        assert_eq!(config.role, AgentRole::Analyst);
+        assert_eq!(config.max_concurrent_tasks, 5);
+        assert_eq!(config.affinity_threshold, 0.8);
     }
 }

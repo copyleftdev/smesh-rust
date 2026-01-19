@@ -331,6 +331,85 @@ pub async fn run_threat_analysis(repo_path: &Path, model: &str, limit: usize) ->
         println!();
     }
 
+    // Run CorrelationFinder analysis on collected patterns
+    if !all_patterns.is_empty() {
+        println!("\n{}🔗 Running Correlation Analysis...{}", "\x1b[96m", "\x1b[0m");
+
+        // Group patterns by category for correlation analysis
+        let mut category_patterns: HashMap<ThreatCategory, Vec<&ThreatPattern>> = HashMap::new();
+        for pattern in &all_patterns {
+            category_patterns
+                .entry(pattern.category)
+                .or_default()
+                .push(pattern);
+        }
+
+        // Analyze correlations for categories with multiple patterns
+        for (category, patterns) in category_patterns.iter() {
+            if patterns.len() < 2 {
+                continue;
+            }
+
+            let pattern_summaries: String = patterns
+                .iter()
+                .take(5)
+                .map(|p| format!("- {}: {}", p.pattern_name, p.description.chars().take(50).collect::<String>()))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            let correlation_prompt = format!(
+                "{}\n\n---\nAnalyze correlations for {:?} patterns:\n{}",
+                AnalyzerType::CorrelationFinder.system_prompt(),
+                category,
+                pattern_summaries
+            );
+
+            print!("   🔍 Correlating {:?} patterns... ", category);
+            std::io::Write::flush(&mut std::io::stdout())?;
+
+            match client.generate(&correlation_prompt, None).await {
+                Ok(correlations) => {
+                    println!("✓");
+
+                    // Parse and display correlation findings
+                    for line in correlations.lines() {
+                        if line.starts_with("RELATED_ATTACKS:") {
+                            let related = line.replace("RELATED_ATTACKS:", "").trim().to_string();
+                            if !related.is_empty() {
+                                println!("      Related: {}", related);
+                            }
+                        } else if line.starts_with("CHAINS_WITH:") {
+                            let chains = line.replace("CHAINS_WITH:", "").trim().to_string();
+                            if !chains.is_empty() {
+                                println!("      Chains with: {}", chains);
+                            }
+                        } else if line.starts_with("RECON_SIGNS:") {
+                            let recon = line.replace("RECON_SIGNS:", "").trim().to_string();
+                            if !recon.is_empty() {
+                                println!("      Recon indicators: {}", recon);
+                            }
+                        }
+                    }
+
+                    // Emit correlation signal
+                    let correlation_signal = Signal::builder(SignalType::Data)
+                        .payload(correlations.as_bytes().to_vec())
+                        .intensity(0.7)
+                        .confidence(0.75)
+                        .build();
+                    field.emit_anonymous(correlation_signal);
+                }
+                Err(e) => {
+                    println!("✗ ({})", e);
+                }
+            }
+
+            sleep(Duration::from_millis(100)).await;
+        }
+
+        println!();
+    }
+
     // Print threat intelligence summary
     print_threat_summary(&all_patterns, &category_counts, &field);
 
@@ -469,18 +548,45 @@ fn print_threat_summary(
     println!("   Active signals: {}", stats.active_signals);
     println!("   Total reinforcements: {}", stats.total_reinforcements);
 
-    // Critical patterns
-    let critical: Vec<_> = patterns.iter()
+    // Critical patterns with description and reinforcement info
+    let critical: Vec<_> = patterns
+        .iter()
         .filter(|p| p.category.severity() == "CRITICAL")
         .collect();
-    
+
     if !critical.is_empty() {
         println!("\n{}🚨 CRITICAL Patterns ({}):{}", red, critical.len(), reset);
         for p in critical.iter().take(5) {
             println!("   {} • {} ({})", red, p.pattern_name, p.source_file);
+            // Display description
+            let desc_preview: String = p.description.chars().take(60).collect();
+            if !desc_preview.is_empty() {
+                println!("     {}Description: {}...{}", yellow, desc_preview, reset);
+            }
+            // Display confidence and reinforcements
+            println!(
+                "     Confidence: {}{:.0}%{} (reinforced {}{}x{})",
+                cyan, p.confidence * 100.0, reset, green, p.reinforcements, reset
+            );
             if !p.example_payloads.is_empty() {
                 println!("     {}Example: {}{}", yellow, p.example_payloads[0], reset);
             }
+        }
+    }
+
+    // High severity patterns summary
+    let high: Vec<_> = patterns
+        .iter()
+        .filter(|p| p.category.severity() == "HIGH")
+        .collect();
+
+    if !high.is_empty() {
+        println!("\n{}⚠️  HIGH Severity Patterns ({}):{}", yellow, high.len(), reset);
+        for p in high.iter().take(3) {
+            println!(
+                "   {} • {} - {:.0}% confidence ({}x reinforced){}",
+                yellow, p.pattern_name, p.confidence * 100.0, p.reinforcements, reset
+            );
         }
     }
 
