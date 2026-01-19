@@ -8,9 +8,9 @@
 //! - Peer discovery and management
 
 pub mod peer;
-pub mod transport;
 pub mod runtime;
+pub mod transport;
 
-pub use peer::{Peer, PeerManager, PeerId};
-pub use transport::{Transport, QuicTransport, TransportConfig, TransportMessage, TransportError};
-pub use runtime::{SmeshRuntime, RuntimeConfig, RuntimeEvent, RuntimeStats};
+pub use peer::{Peer, PeerId, PeerManager};
+pub use runtime::{RuntimeConfig, RuntimeEvent, RuntimeStats, SmeshRuntime};
+pub use transport::{QuicTransport, Transport, TransportConfig, TransportError, TransportMessage};

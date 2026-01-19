@@ -3,14 +3,14 @@
 //! Provides generic backend support for LLM agents, allowing use of
 //! Ollama, Claude, or other LLM backends.
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use serde::{Deserialize, Serialize};
-use tracing::{info, debug};
+use tracing::{debug, info};
 
-use smesh_core::{Node, Signal};
 use crate::backend::{LlmBackend, LlmError};
 use crate::ollama::{OllamaClient, OllamaConfig};
+use smesh_core::{Node, Signal};
 
 /// Agent roles that determine skills and behavior
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,38 +37,48 @@ impl AgentRole {
                 (TaskType::Testing, 0.8),
                 (TaskType::Documentation, 0.5),
                 (TaskType::Analysis, 0.6),
-            ].into_iter().collect(),
+            ]
+            .into_iter()
+            .collect(),
             AgentRole::Reviewer => [
                 (TaskType::CodeReview, 0.95),
                 (TaskType::CodeWrite, 0.6),
                 (TaskType::Testing, 0.7),
                 (TaskType::Documentation, 0.6),
                 (TaskType::Analysis, 0.8),
-            ].into_iter().collect(),
+            ]
+            .into_iter()
+            .collect(),
             AgentRole::Analyst => [
                 (TaskType::Analysis, 0.95),
                 (TaskType::Documentation, 0.7),
                 (TaskType::CodeReview, 0.5),
                 (TaskType::CodeWrite, 0.4),
                 (TaskType::Testing, 0.5),
-            ].into_iter().collect(),
+            ]
+            .into_iter()
+            .collect(),
             AgentRole::Writer => [
                 (TaskType::Documentation, 0.95),
                 (TaskType::Analysis, 0.7),
                 (TaskType::CodeReview, 0.5),
                 (TaskType::CodeWrite, 0.4),
                 (TaskType::Testing, 0.3),
-            ].into_iter().collect(),
+            ]
+            .into_iter()
+            .collect(),
             AgentRole::General => [
                 (TaskType::CodeWrite, 0.7),
                 (TaskType::CodeReview, 0.7),
                 (TaskType::Testing, 0.7),
                 (TaskType::Documentation, 0.7),
                 (TaskType::Analysis, 0.7),
-            ].into_iter().collect(),
+            ]
+            .into_iter()
+            .collect(),
         }
     }
-    
+
     /// Get system prompt for this role
     pub fn system_prompt(&self, name: &str) -> String {
         let role_desc = match self {
@@ -78,7 +88,7 @@ impl AgentRole {
             AgentRole::Writer => "technical writer and documentation specialist",
             AgentRole::General => "general-purpose AI assistant",
         };
-        
+
         format!(
             "You are {}, a {}. You coordinate with other agents through \
              a signal-based system (SMESH). Be concise and focused on the task.",
@@ -107,15 +117,19 @@ impl TaskType {
             TaskType::Analysis => "analysis",
         }
     }
-    
-    pub fn from_str(s: &str) -> Option<Self> {
+}
+
+impl std::str::FromStr for TaskType {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "code_write" => Some(TaskType::CodeWrite),
-            "code_review" => Some(TaskType::CodeReview),
-            "testing" => Some(TaskType::Testing),
-            "documentation" => Some(TaskType::Documentation),
-            "analysis" => Some(TaskType::Analysis),
-            _ => None,
+            "code_write" => Ok(TaskType::CodeWrite),
+            "code_review" => Ok(TaskType::CodeReview),
+            "testing" => Ok(TaskType::Testing),
+            "documentation" => Ok(TaskType::Documentation),
+            "analysis" => Ok(TaskType::Analysis),
+            _ => Err(()),
         }
     }
 }
@@ -241,33 +255,38 @@ impl LlmAgent {
     pub fn backend(&self) -> &dyn LlmBackend {
         self.backend.as_ref()
     }
-    
+
     /// Get agent's node ID
     pub fn node_id(&self) -> &str {
         &self.node.id
     }
-    
+
     /// Get agent's name
     pub fn name(&self) -> &str {
         &self.config.name
     }
-    
+
     /// Get skill level for a task type
     pub fn skill(&self, task_type: TaskType) -> f64 {
-        self.config.role.skills().get(&task_type).copied().unwrap_or(0.5)
+        self.config
+            .role
+            .skills()
+            .get(&task_type)
+            .copied()
+            .unwrap_or(0.5)
     }
-    
+
     /// Check if agent can take more tasks
     pub fn has_capacity(&self) -> bool {
         self.current_tasks.len() < self.config.max_concurrent_tasks
     }
-    
+
     /// Decide whether to claim a task based on skills
     pub fn should_claim(&self, task_type: TaskType, _priority: f64) -> Option<f64> {
         if !self.has_capacity() {
             return None;
         }
-        
+
         let affinity = self.skill(task_type);
         if affinity >= self.config.affinity_threshold {
             Some(affinity)
@@ -275,7 +294,7 @@ impl LlmAgent {
             None
         }
     }
-    
+
     /// Execute a task using the LLM
     pub async fn execute_task(&mut self, task: &mut AgentTask) -> Result<String, LlmError> {
         let prompt = format!(
@@ -303,38 +322,38 @@ impl LlmAgent {
 
         Ok(result)
     }
-    
+
     /// Process signals and decide on actions
     pub fn process_signals(&mut self, signals: &[Signal]) -> Vec<AgentAction> {
         let mut actions = Vec::new();
-        
+
         for signal in signals {
             if let Some(action) = self.process_signal(signal) {
                 actions.push(action);
             }
         }
-        
+
         actions
     }
-    
+
     fn process_signal(&mut self, signal: &Signal) -> Option<AgentAction> {
         // Parse signal payload
         let payload: serde_json::Value = serde_json::from_slice(&signal.payload).ok()?;
-        
+
         let signal_type = payload.get("agent_signal_type")?.as_str()?;
-        
+
         match signal_type {
             "task_available" => {
                 let task_id = payload.get("task_id")?.as_str()?;
                 let task_type_str = payload.get("task_type")?.as_str()?;
-                let task_type = TaskType::from_str(task_type_str)?;
+                let task_type = task_type_str.parse::<TaskType>().ok()?;
                 let priority = payload.get("priority")?.as_f64().unwrap_or(0.5);
-                
+
                 // Skip if already in queue
                 if self.task_queue.contains(&task_id.to_string()) {
                     return None;
                 }
-                
+
                 // Check if we should claim
                 if let Some(affinity) = self.should_claim(task_type, priority) {
                     self.task_queue.push(task_id.to_string());
@@ -348,16 +367,16 @@ impl LlmAgent {
                 let task_id = payload.get("task_id")?.as_str()?;
                 let claimer = payload.get("claimer")?.as_str()?;
                 let their_affinity = payload.get("affinity")?.as_f64().unwrap_or(0.0);
-                
+
                 // Check for conflict
                 if self.task_queue.contains(&task_id.to_string()) && claimer != self.node.id {
                     // Back off if they have higher affinity
                     let task_type_str = payload.get("task_type").and_then(|v| v.as_str());
                     let our_affinity = task_type_str
-                        .and_then(TaskType::from_str)
+                        .and_then(|s| s.parse::<TaskType>().ok())
                         .map(|tt| self.skill(tt))
                         .unwrap_or(0.5);
-                    
+
                     if their_affinity > our_affinity + 0.1 {
                         self.task_queue.retain(|id| id != task_id);
                         return Some(AgentAction::BackOff {
@@ -368,7 +387,7 @@ impl LlmAgent {
             }
             _ => {}
         }
-        
+
         None
     }
 }
@@ -377,19 +396,11 @@ impl LlmAgent {
 #[derive(Debug, Clone)]
 pub enum AgentAction {
     /// Claim a task
-    ClaimTask {
-        task_id: String,
-        affinity: f64,
-    },
+    ClaimTask { task_id: String, affinity: f64 },
     /// Back off from a claimed task
-    BackOff {
-        task_id: String,
-    },
+    BackOff { task_id: String },
     /// Emit task completion
-    CompleteTask {
-        task_id: String,
-        result: String,
-    },
+    CompleteTask { task_id: String, result: String },
 }
 
 #[cfg(test)]

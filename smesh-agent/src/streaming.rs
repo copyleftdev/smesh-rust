@@ -18,14 +18,29 @@ use serde_json::Value;
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SseEvent {
-    MessageStart { message: SseMessageStart },
-    ContentBlockStart { index: usize, content_block: SseContentBlock },
-    ContentBlockDelta { index: usize, delta: SseDelta },
-    ContentBlockStop { index: usize },
-    MessageDelta { delta: SseMessageDelta, usage: SseUsage },
+    MessageStart {
+        message: SseMessageStart,
+    },
+    ContentBlockStart {
+        index: usize,
+        content_block: SseContentBlock,
+    },
+    ContentBlockDelta {
+        index: usize,
+        delta: SseDelta,
+    },
+    ContentBlockStop {
+        index: usize,
+    },
+    MessageDelta {
+        delta: SseMessageDelta,
+        usage: SseUsage,
+    },
     MessageStop,
     Ping,
-    Error { error: SseError },
+    Error {
+        error: SseError,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -38,8 +53,14 @@ pub struct SseMessageStart {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SseContentBlock {
-    Text { text: String },
-    ToolUse { id: String, name: String, input: Value },
+    Text {
+        text: String,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+        input: Value,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -100,7 +121,11 @@ pub fn parse_sse_event(event_str: &str) -> Option<StreamEvent> {
         }
         "content_block_start" => {
             let sse: SseEvent = serde_json::from_str(data).ok()?;
-            if let SseEvent::ContentBlockStart { index, content_block } = sse {
+            if let SseEvent::ContentBlockStart {
+                index,
+                content_block,
+            } = sse
+            {
                 let block = match content_block {
                     SseContentBlock::Text { text } => ContentBlock::Text { text },
                     SseContentBlock::ToolUse { id, name, input } => {

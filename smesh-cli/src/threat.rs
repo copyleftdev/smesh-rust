@@ -1,6 +1,6 @@
 use anyhow::Result;
 use smesh_agent::{OllamaClient, OllamaConfig};
-use smesh_core::{Field, Node, Signal, SignalType};
+use smesh_core::{Field, Node, Signal, SignalType, ThreatPayloadCompact};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -8,6 +8,7 @@ use tokio::time::{sleep, Duration};
 
 /// Threat categories for classification
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum ThreatCategory {
     Injection,        // SQLi, Command Injection, LDAP, XPath
     XSS,              // Cross-Site Scripting variants
@@ -24,14 +25,19 @@ pub enum ThreatCategory {
 impl ThreatCategory {
     fn from_path(path: &str) -> Self {
         let lower = path.to_lowercase();
-        
+
         if lower.contains("injection") || lower.contains("sqli") {
             ThreatCategory::Injection
         } else if lower.contains("xss") || lower.contains("cross-site scripting") {
             ThreatCategory::XSS
-        } else if lower.contains("traversal") || lower.contains("inclusion") || lower.contains("lfi") || lower.contains("rfi") {
+        } else if lower.contains("traversal")
+            || lower.contains("inclusion")
+            || lower.contains("lfi")
+            || lower.contains("rfi")
+        {
             ThreatCategory::Traversal
-        } else if lower.contains("auth") || lower.contains("session") || lower.contains("takeover") {
+        } else if lower.contains("auth") || lower.contains("session") || lower.contains("takeover")
+        {
             ThreatCategory::Authentication
         } else if lower.contains("deseriali") {
             ThreatCategory::Deserialization
@@ -66,9 +72,12 @@ impl ThreatCategory {
     fn color(&self) -> &'static str {
         match self {
             ThreatCategory::Injection | ThreatCategory::Deserialization => "\x1b[91m", // Red
-            ThreatCategory::Traversal | ThreatCategory::SSRF | ThreatCategory::XXE | ThreatCategory::Authentication => "\x1b[93m", // Yellow
-            ThreatCategory::XSS | ThreatCategory::Cryptographic => "\x1b[94m", // Blue
-            _ => "\x1b[90m", // Gray
+            ThreatCategory::Traversal
+            | ThreatCategory::SSRF
+            | ThreatCategory::XXE
+            | ThreatCategory::Authentication => "\x1b[93m", // Yellow
+            ThreatCategory::XSS | ThreatCategory::Cryptographic => "\x1b[94m",         // Blue
+            _ => "\x1b[90m",                                                           // Gray
         }
     }
 }
@@ -89,10 +98,10 @@ pub struct ThreatPattern {
 /// Threat analyzer agent types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AnalyzerType {
-    PatternExtractor,   // Extracts payload patterns
-    RiskAssessor,       // Assesses risk level
-    MitigationAdvisor,  // Suggests mitigations
-    CorrelationFinder,  // Finds related patterns
+    PatternExtractor,  // Extracts payload patterns
+    RiskAssessor,      // Assesses risk level
+    MitigationAdvisor, // Suggests mitigations
+    CorrelationFinder, // Finds related patterns
 }
 
 impl AnalyzerType {
@@ -158,7 +167,11 @@ Be concise."
 }
 
 /// Run SMESH-coordinated threat analysis
-pub async fn run_threat_analysis(repo_path: &Path, model: &str, limit: usize) -> Result<Vec<ThreatPattern>> {
+pub async fn run_threat_analysis(
+    repo_path: &Path,
+    model: &str,
+    limit: usize,
+) -> Result<Vec<ThreatPattern>> {
     println!("\n\x1b[91m🔥 SMESH Threat Intelligence - Signal Diffusion Mode\x1b[0m\n");
     println!("Target: {}", repo_path.display());
     println!("Model: {}", model);
@@ -187,9 +200,11 @@ pub async fn run_threat_analysis(repo_path: &Path, model: &str, limit: usize) ->
     println!("📂 Found {} threat documents to analyze\n", md_files.len());
 
     // Initialize Ollama client
-    let mut config = OllamaConfig::default();
-    config.model = model.to_string();
-    config.max_tokens = 1024;
+    let config = OllamaConfig {
+        model: model.to_string(),
+        max_tokens: 1024,
+        ..Default::default()
+    };
     let client = OllamaClient::new(config);
 
     // Check Ollama connection
@@ -226,20 +241,30 @@ pub async fn run_threat_analysis(repo_path: &Path, model: &str, limit: usize) ->
         );
 
         let content = fs::read_to_string(file_path)?;
-        
+
         // Skip very small files
         if content.lines().count() < 10 {
             println!("   ⏭️  Skipping (< 10 lines)\n");
             continue;
         }
 
-        // Emit THREAT_DOC signal
+        // Emit THREAT_DOC signal using TOON format (compact payload)
+        let threat_payload = ThreatPayloadCompact {
+            cat: format!("{:?}", category).to_lowercase(),
+            src: relative_path.clone(),
+            sev: category
+                .severity()
+                .chars()
+                .next()
+                .unwrap_or('I')
+                .to_string(),
+        };
         let doc_signal = Signal::builder(SignalType::Alert)
-            .payload(relative_path.as_bytes().to_vec())
+            .payload_toon(&threat_payload)
             .intensity(1.0)
             .confidence(0.9)
             .build();
-        
+
         field.emit_anonymous(doc_signal);
 
         // Pattern Extractor analyzes the file
@@ -263,9 +288,19 @@ pub async fn run_threat_analysis(repo_path: &Path, model: &str, limit: usize) ->
             }
         };
 
-        // Emit pattern signal
+        // Emit pattern signal using TOON format (compact: only category and source)
+        let pattern_payload = ThreatPayloadCompact {
+            cat: format!("{:?}", category).to_lowercase(),
+            src: relative_path.clone(),
+            sev: category
+                .severity()
+                .chars()
+                .next()
+                .unwrap_or('I')
+                .to_string(),
+        };
         let pattern_signal = Signal::builder(SignalType::Data)
-            .payload(extraction.as_bytes().to_vec())
+            .payload_toon(&pattern_payload)
             .intensity(0.9)
             .confidence(0.8)
             .build();
@@ -316,8 +351,9 @@ pub async fn run_threat_analysis(repo_path: &Path, model: &str, limit: usize) ->
             reinforcements,
         };
 
-        println!("      └─ Pattern: {} (confidence: {:.0}%)", 
-            pattern.pattern_name, 
+        println!(
+            "      └─ Pattern: {} (confidence: {:.0}%)",
+            pattern.pattern_name,
             pattern.confidence * 100.0
         );
 
@@ -333,7 +369,7 @@ pub async fn run_threat_analysis(repo_path: &Path, model: &str, limit: usize) ->
 
     // Run CorrelationFinder analysis on collected patterns
     if !all_patterns.is_empty() {
-        println!("\n{}🔗 Running Correlation Analysis...{}", "\x1b[96m", "\x1b[0m");
+        println!("\n\x1b[96m🔗 Running Correlation Analysis...\x1b[0m");
 
         // Group patterns by category for correlation analysis
         let mut category_patterns: HashMap<ThreatCategory, Vec<&ThreatPattern>> = HashMap::new();
@@ -353,7 +389,13 @@ pub async fn run_threat_analysis(repo_path: &Path, model: &str, limit: usize) ->
             let pattern_summaries: String = patterns
                 .iter()
                 .take(5)
-                .map(|p| format!("- {}: {}", p.pattern_name, p.description.chars().take(50).collect::<String>()))
+                .map(|p| {
+                    format!(
+                        "- {}: {}",
+                        p.pattern_name,
+                        p.description.chars().take(50).collect::<String>()
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join("\n");
 
@@ -391,9 +433,19 @@ pub async fn run_threat_analysis(repo_path: &Path, model: &str, limit: usize) ->
                         }
                     }
 
-                    // Emit correlation signal
+                    // Emit correlation signal using TOON format
+                    let corr_payload = ThreatPayloadCompact {
+                        cat: format!("{:?}", category).to_lowercase(),
+                        src: "correlation".to_string(),
+                        sev: category
+                            .severity()
+                            .chars()
+                            .next()
+                            .unwrap_or('I')
+                            .to_string(),
+                    };
                     let correlation_signal = Signal::builder(SignalType::Data)
-                        .payload(correlations.as_bytes().to_vec())
+                        .payload_toon(&corr_payload)
                         .intensity(0.7)
                         .confidence(0.75)
                         .build();
@@ -419,13 +471,13 @@ pub async fn run_threat_analysis(repo_path: &Path, model: &str, limit: usize) ->
 fn collect_threat_files(dir: &Path, limit: usize) -> Result<Vec<std::path::PathBuf>> {
     let mut files = Vec::new();
     collect_md_recursive(dir, &mut files)?;
-    
+
     // Sort by path for consistent ordering
     files.sort();
-    
+
     // Apply limit
     files.truncate(limit);
-    
+
     Ok(files)
 }
 
@@ -437,17 +489,20 @@ fn collect_md_recursive(dir: &Path, files: &mut Vec<std::path::PathBuf>) -> Resu
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
-        
+
         if path.is_dir() {
             let name = path.file_name().unwrap_or_default().to_string_lossy();
             // Skip hidden dirs and specific folders
             if !name.starts_with('.') && name != "_template" {
                 collect_md_recursive(&path, files)?;
             }
-        } else if path.extension().map_or(false, |e| e == "md") {
+        } else if path.extension().is_some_and(|e| e == "md") {
             let name = path.file_name().unwrap_or_default().to_string_lossy();
             // Skip README, CONTRIBUTING, etc.
-            if !name.starts_with("README") && !name.starts_with("CONTRIB") && !name.starts_with("DISCLAIM") {
+            if !name.starts_with("README")
+                && !name.starts_with("CONTRIB")
+                && !name.starts_with("DISCLAIM")
+            {
                 files.push(path);
             }
         }
@@ -475,14 +530,19 @@ fn extract_payloads(extraction: &str) -> Vec<String> {
         }
         if in_payloads {
             if line.starts_with("- ") || line.starts_with("* ") {
-                let payload = line.trim_start_matches("- ").trim_start_matches("* ").trim();
+                let payload = line
+                    .trim_start_matches("- ")
+                    .trim_start_matches("* ")
+                    .trim();
                 if !payload.is_empty() && payload.len() < 200 {
                     payloads.push(payload.to_string());
                 }
-            } else if line.starts_with("VARIATIONS") || line.starts_with("TECHNIQUE") || line.is_empty() {
-                if !payloads.is_empty() {
-                    break;
-                }
+            } else if (line.starts_with("VARIATIONS")
+                || line.starts_with("TECHNIQUE")
+                || line.is_empty())
+                && !payloads.is_empty()
+            {
+                break;
             }
         }
     }
@@ -528,18 +588,34 @@ fn print_threat_summary(
     let green = "\x1b[92m";
     let cyan = "\x1b[96m";
 
-    println!("\n{}═══════════════════════════════════════════════════════════════{}", red, reset);
-    println!("{}                    THREAT INTELLIGENCE SUMMARY                 {}", red, reset);
-    println!("{}═══════════════════════════════════════════════════════════════{}\n", red, reset);
+    println!(
+        "\n{}═══════════════════════════════════════════════════════════════{}",
+        red, reset
+    );
+    println!(
+        "{}                    THREAT INTELLIGENCE SUMMARY                 {}",
+        red, reset
+    );
+    println!(
+        "{}═══════════════════════════════════════════════════════════════{}\n",
+        red, reset
+    );
 
     // Category breakdown
     println!("{}📊 Threat Categories:{}", cyan, reset);
     let mut categories: Vec<_> = category_counts.iter().collect();
     categories.sort_by(|a, b| b.1.cmp(a.1));
-    
+
     for (cat, count) in categories {
         let color = cat.color();
-        println!("   {} {:?}: {} files [{}]{}", color, cat, count, cat.severity(), reset);
+        println!(
+            "   {} {:?}: {} files [{}]{}",
+            color,
+            cat,
+            count,
+            cat.severity(),
+            reset
+        );
     }
 
     // Signal field stats
@@ -555,7 +631,12 @@ fn print_threat_summary(
         .collect();
 
     if !critical.is_empty() {
-        println!("\n{}🚨 CRITICAL Patterns ({}):{}", red, critical.len(), reset);
+        println!(
+            "\n{}🚨 CRITICAL Patterns ({}):{}",
+            red,
+            critical.len(),
+            reset
+        );
         for p in critical.iter().take(5) {
             println!("   {} • {} ({})", red, p.pattern_name, p.source_file);
             // Display description
@@ -566,7 +647,12 @@ fn print_threat_summary(
             // Display confidence and reinforcements
             println!(
                 "     Confidence: {}{:.0}%{} (reinforced {}{}x{})",
-                cyan, p.confidence * 100.0, reset, green, p.reinforcements, reset
+                cyan,
+                p.confidence * 100.0,
+                reset,
+                green,
+                p.reinforcements,
+                reset
             );
             if !p.example_payloads.is_empty() {
                 println!("     {}Example: {}{}", yellow, p.example_payloads[0], reset);
@@ -581,19 +667,27 @@ fn print_threat_summary(
         .collect();
 
     if !high.is_empty() {
-        println!("\n{}⚠️  HIGH Severity Patterns ({}):{}", yellow, high.len(), reset);
+        println!(
+            "\n{}⚠️  HIGH Severity Patterns ({}):{}",
+            yellow,
+            high.len(),
+            reset
+        );
         for p in high.iter().take(3) {
             println!(
                 "   {} • {} - {:.0}% confidence ({}x reinforced){}",
-                yellow, p.pattern_name, p.confidence * 100.0, p.reinforcements, reset
+                yellow,
+                p.pattern_name,
+                p.confidence * 100.0,
+                p.reinforcements,
+                reset
             );
         }
     }
 
     // Top mitigations
-    let mut all_mitigations: Vec<&String> = patterns.iter()
-        .flat_map(|p| p.mitigations.iter())
-        .collect();
+    let mut all_mitigations: Vec<&String> =
+        patterns.iter().flat_map(|p| p.mitigations.iter()).collect();
     all_mitigations.truncate(10);
 
     if !all_mitigations.is_empty() {
@@ -604,7 +698,18 @@ fn print_threat_summary(
         }
     }
 
-    println!("\n{}═══════════════════════════════════════════════════════════════{}", red, reset);
-    println!("{}🔥 Analysis complete. {} threat patterns identified.{}", red, patterns.len(), reset);
-    println!("{}═══════════════════════════════════════════════════════════════{}\n", red, reset);
+    println!(
+        "\n{}═══════════════════════════════════════════════════════════════{}",
+        red, reset
+    );
+    println!(
+        "{}🔥 Analysis complete. {} threat patterns identified.{}",
+        red,
+        patterns.len(),
+        reset
+    );
+    println!(
+        "{}═══════════════════════════════════════════════════════════════{}\n",
+        red, reset
+    );
 }

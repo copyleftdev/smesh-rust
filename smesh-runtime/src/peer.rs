@@ -1,10 +1,10 @@
 //! Peer management for SMESH networking
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use serde::{Deserialize, Serialize};
 
 use smesh_core::NodeId;
 
@@ -55,12 +55,12 @@ impl Peer {
             latency_ms: 0,
         }
     }
-    
+
     /// Check if peer is connected
     pub fn is_connected(&self) -> bool {
         self.state == PeerState::Connected
     }
-    
+
     /// Update last seen timestamp
     pub fn touch(&mut self) {
         self.last_seen = std::time::SystemTime::now()
@@ -91,40 +91,41 @@ impl PeerManager {
             local_id,
         }
     }
-    
+
     /// Add or update a peer
     pub async fn add_peer(&self, peer: Peer) -> bool {
         let mut peers = self.peers.write().await;
-        
+
         if peers.len() >= self.max_peers && !peers.contains_key(&peer.id) {
             return false;
         }
-        
+
         peers.insert(peer.id.clone(), peer);
         true
     }
-    
+
     /// Remove a peer
     pub async fn remove_peer(&self, peer_id: &str) -> Option<Peer> {
         let mut peers = self.peers.write().await;
         peers.remove(peer_id)
     }
-    
+
     /// Get a peer by ID
     pub async fn get_peer(&self, peer_id: &str) -> Option<Peer> {
         let peers = self.peers.read().await;
         peers.get(peer_id).cloned()
     }
-    
+
     /// Get all connected peers
     pub async fn connected_peers(&self) -> Vec<Peer> {
         let peers = self.peers.read().await;
-        peers.values()
+        peers
+            .values()
             .filter(|p| p.is_connected())
             .cloned()
             .collect()
     }
-    
+
     /// Update peer state
     pub async fn update_state(&self, peer_id: &str, state: PeerState) {
         let mut peers = self.peers.write().await;
@@ -133,24 +134,24 @@ impl PeerManager {
             peer.touch();
         }
     }
-    
+
     /// Get peer count
     pub async fn peer_count(&self) -> usize {
         let peers = self.peers.read().await;
         peers.len()
     }
-    
+
     /// Get connected peer count
     pub async fn connected_count(&self) -> usize {
         let peers = self.peers.read().await;
         peers.values().filter(|p| p.is_connected()).count()
     }
-    
+
     /// Ban a peer
     pub async fn ban_peer(&self, peer_id: &str) {
         self.update_state(peer_id, PeerState::Banned).await;
     }
-    
+
     /// Prune stale peers (not seen in timeout_ms)
     pub async fn prune_stale(&self, timeout_ms: u64) -> usize {
         let mut peers = self.peers.write().await;
@@ -158,21 +159,19 @@ impl PeerManager {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-        
+
         let stale: Vec<PeerId> = peers
             .iter()
             .filter(|(_, p)| {
-                p.state != PeerState::Banned && 
-                p.last_seen > 0 && 
-                now - p.last_seen > timeout_ms
+                p.state != PeerState::Banned && p.last_seen > 0 && now - p.last_seen > timeout_ms
             })
             .map(|(id, _)| id.clone())
             .collect();
-        
+
         for id in &stale {
             peers.remove(id);
         }
-        
+
         stale.len()
     }
 }
@@ -180,23 +179,23 @@ impl PeerManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[tokio::test]
     async fn test_peer_manager() {
         let manager = PeerManager::new("local".to_string(), 10);
-        
+
         let peer = Peer::new(
             "peer1".to_string(),
             "127.0.0.1:8000".parse().unwrap(),
             "node1".to_string(),
         );
-        
+
         assert!(manager.add_peer(peer).await);
         assert_eq!(manager.peer_count().await, 1);
-        
+
         manager.update_state("peer1", PeerState::Connected).await;
         assert_eq!(manager.connected_count().await, 1);
-        
+
         manager.remove_peer("peer1").await;
         assert_eq!(manager.peer_count().await, 0);
     }

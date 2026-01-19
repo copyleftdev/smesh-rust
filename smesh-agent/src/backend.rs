@@ -13,25 +13,25 @@ use thiserror::Error;
 pub enum LlmError {
     #[error("Connection failed: {0}")]
     ConnectionFailed(String),
-    
+
     #[error("Request failed: {0}")]
     RequestFailed(String),
-    
+
     #[error("Model not found: {0}")]
     ModelNotFound(String),
-    
+
     #[error("Generation failed: {0}")]
     GenerationFailed(String),
-    
+
     #[error("Rate limited: retry after {0:?}")]
     RateLimited(Duration),
-    
+
     #[error("Authentication failed")]
     AuthFailed,
-    
+
     #[error("Timeout after {0:?}")]
     Timeout(Duration),
-    
+
     #[error("Invalid response: {0}")]
     InvalidResponse(String),
 
@@ -97,7 +97,11 @@ impl Message {
     }
 
     /// Create a message with a tool result
-    pub fn tool_result(tool_use_id: impl Into<String>, content: impl Into<String>, is_error: bool) -> Self {
+    pub fn tool_result(
+        tool_use_id: impl Into<String>,
+        content: impl Into<String>,
+        is_error: bool,
+    ) -> Self {
         Self {
             role: MessageRole::User,
             content: vec![ContentBlock::ToolResult {
@@ -136,7 +140,11 @@ pub struct ToolDefinition {
 
 impl ToolDefinition {
     /// Create a new tool definition
-    pub fn new(name: impl Into<String>, description: impl Into<String>, input_schema: Value) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        input_schema: Value,
+    ) -> Self {
         Self {
             name: name.into(),
             description: description.into(),
@@ -187,10 +195,11 @@ impl ContentBlock {
 }
 
 /// How the model should choose which tool to use
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolChoice {
     /// Model decides whether to use a tool
+    #[default]
     Auto,
     /// Model must use a tool
     Any,
@@ -198,12 +207,6 @@ pub enum ToolChoice {
     None,
     /// Model must use the specified tool
     Tool { name: String },
-}
-
-impl Default for ToolChoice {
-    fn default() -> Self {
-        ToolChoice::Auto
-    }
 }
 
 /// Reason the model stopped generating
@@ -229,23 +232,16 @@ pub enum StopReason {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StreamEvent {
     /// Message generation started
-    MessageStart {
-        message: StreamMessageStart,
-    },
+    MessageStart { message: StreamMessageStart },
     /// A content block started
     ContentBlockStart {
         index: usize,
         content_block: ContentBlock,
     },
     /// Delta for a content block
-    ContentBlockDelta {
-        index: usize,
-        delta: ContentDelta,
-    },
+    ContentBlockDelta { index: usize, delta: ContentDelta },
     /// A content block finished
-    ContentBlockStop {
-        index: usize,
-    },
+    ContentBlockStop { index: usize },
     /// Message-level delta (stop reason, usage)
     MessageDelta {
         delta: MessageDeltaData,
@@ -254,9 +250,7 @@ pub enum StreamEvent {
     /// Message generation complete
     MessageStop,
     /// Error during streaming
-    Error {
-        error: StreamError,
-    },
+    Error { error: StreamError },
     /// Ping to keep connection alive
     Ping,
 }
@@ -418,7 +412,9 @@ impl GenerateResponseV2 {
         self.content
             .iter()
             .filter_map(|c| match c {
-                ContentBlock::ToolUse { id, name, input } => Some((id.as_str(), name.as_str(), input)),
+                ContentBlock::ToolUse { id, name, input } => {
+                    Some((id.as_str(), name.as_str(), input))
+                }
                 _ => None,
             })
             .collect()
@@ -458,17 +454,17 @@ impl GenerateRequest {
             stop_sequences: Vec::new(),
         }
     }
-    
+
     pub fn with_system(mut self, system: impl Into<String>) -> Self {
         self.system = Some(system.into());
         self
     }
-    
+
     pub fn with_temperature(mut self, temp: f32) -> Self {
         self.temperature = temp;
         self
     }
-    
+
     pub fn with_max_tokens(mut self, max: u32) -> Self {
         self.max_tokens = max;
         self
@@ -497,9 +493,8 @@ pub struct GenerateResponse {
 impl GenerateResponse {
     /// Calculate tokens per second (if output_tokens available)
     pub fn tokens_per_second(&self) -> Option<f64> {
-        self.output_tokens.map(|tokens| {
-            tokens as f64 / self.latency.as_secs_f64()
-        })
+        self.output_tokens
+            .map(|tokens| tokens as f64 / self.latency.as_secs_f64())
     }
 }
 
@@ -508,26 +503,26 @@ impl GenerateResponse {
 pub trait LlmBackend: Send + Sync {
     /// Get the provider type
     fn provider(&self) -> LlmProvider;
-    
+
     /// Get the current model name
     fn model(&self) -> &str;
-    
+
     /// Check if the backend is available
     async fn is_available(&self) -> bool;
-    
+
     /// List available models (if supported)
     async fn list_models(&self) -> Result<Vec<String>, LlmError>;
-    
+
     /// Generate a response
     async fn generate(&self, request: GenerateRequest) -> Result<GenerateResponse, LlmError>;
-    
+
     /// Simple generate with just a prompt
     async fn generate_simple(&self, prompt: &str) -> Result<String, LlmError> {
         let request = GenerateRequest::new(prompt);
         let response = self.generate(request).await?;
         Ok(response.content)
     }
-    
+
     /// Generate with system prompt
     async fn generate_with_system(&self, prompt: &str, system: &str) -> Result<String, LlmError> {
         let request = GenerateRequest::new(prompt).with_system(system);
@@ -540,7 +535,10 @@ pub trait LlmBackend: Send + Sync {
     // ========================================================================
 
     /// Generate with full V2 API support (multi-turn, tools)
-    async fn generate_v2(&self, _request: GenerateRequestV2) -> Result<GenerateResponseV2, LlmError> {
+    async fn generate_v2(
+        &self,
+        _request: GenerateRequestV2,
+    ) -> Result<GenerateResponseV2, LlmError> {
         Err(LlmError::UnsupportedFeature(
             "generate_v2 not supported by this backend".to_string(),
         ))
@@ -603,17 +601,17 @@ pub async fn benchmark_backend(
     system: Option<&str>,
 ) -> BenchmarkResult {
     let start = Instant::now();
-    
+
     let request = GenerateRequest::new(prompt)
         .with_temperature(0.7)
         .with_max_tokens(512);
-    
+
     let request = if let Some(sys) = system {
         request.with_system(sys)
     } else {
         request
     };
-    
+
     match backend.generate(request).await {
         Ok(response) => {
             let tps = response.tokens_per_second();
@@ -653,14 +651,14 @@ pub async fn compare_backends(
     prompts: &[(&str, Option<&str>)], // (prompt, system)
 ) -> Vec<BenchmarkResult> {
     let mut results = Vec::new();
-    
+
     for (prompt, system) in prompts {
         for backend in backends {
             let result = benchmark_backend(*backend, prompt, *system).await;
             results.push(result);
         }
     }
-    
+
     results
 }
 
@@ -669,23 +667,28 @@ pub fn print_comparison(results: &[BenchmarkResult]) {
     println!("\n{:=<80}", "");
     println!("LLM Backend Comparison");
     println!("{:=<80}\n", "");
-    
-    println!("{:<12} {:<20} {:>10} {:>10} {:>12}", 
-        "Provider", "Model", "Latency", "Tokens", "Tok/sec");
+
+    println!(
+        "{:<12} {:<20} {:>10} {:>10} {:>12}",
+        "Provider", "Model", "Latency", "Tokens", "Tok/sec"
+    );
     println!("{:-<66}", "");
-    
+
     for result in results {
         let latency = format!("{:.2}s", result.total_latency.as_secs_f64());
-        let tokens = result.output_tokens
+        let tokens = result
+            .output_tokens
             .map(|t| t.to_string())
             .unwrap_or_else(|| "-".to_string());
-        let tps = result.tokens_per_second
+        let tps = result
+            .tokens_per_second
             .map(|t| format!("{:.1}", t))
             .unwrap_or_else(|| "-".to_string());
-        
+
         let status = if result.success { "" } else { " [FAILED]" };
-        
-        println!("{:<12} {:<20} {:>10} {:>10} {:>12}{}", 
+
+        println!(
+            "{:<12} {:<20} {:>10} {:>10} {:>12}{}",
             result.provider.to_string(),
             truncate(&result.model, 20),
             latency,
@@ -701,7 +704,7 @@ fn truncate(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_string()
     } else {
-        format!("{}...", &s[..max_len-3])
+        format!("{}...", &s[..max_len - 3])
     }
 }
 
@@ -756,8 +759,14 @@ impl Conversation {
     }
 
     /// Add a tool result
-    pub fn add_tool_result(&mut self, tool_use_id: impl Into<String>, result: impl Into<String>, is_error: bool) {
-        self.messages.push(Message::tool_result(tool_use_id, result, is_error));
+    pub fn add_tool_result(
+        &mut self,
+        tool_use_id: impl Into<String>,
+        result: impl Into<String>,
+        is_error: bool,
+    ) {
+        self.messages
+            .push(Message::tool_result(tool_use_id, result, is_error));
     }
 
     /// Add a raw message
@@ -836,13 +845,17 @@ mod tests {
     fn test_tool_result_message() {
         let msg = Message::tool_result("tool-123", "result data", false);
         assert_eq!(msg.role, MessageRole::User);
-        assert!(matches!(&msg.content[0], ContentBlock::ToolResult { tool_use_id, is_error, .. }
-            if tool_use_id == "tool-123" && !is_error));
+        assert!(
+            matches!(&msg.content[0], ContentBlock::ToolResult { tool_use_id, is_error, .. }
+            if tool_use_id == "tool-123" && !is_error)
+        );
     }
 
     #[test]
     fn test_content_block_methods() {
-        let text_block = ContentBlock::Text { text: "hello".to_string() };
+        let text_block = ContentBlock::Text {
+            text: "hello".to_string(),
+        };
         assert!(text_block.is_text());
         assert!(!text_block.is_tool_use());
         assert_eq!(text_block.as_text(), Some("hello"));
@@ -850,7 +863,7 @@ mod tests {
         let tool_block = ContentBlock::ToolUse {
             id: "id".to_string(),
             name: "tool".to_string(),
-            input: serde_json::json!({})
+            input: serde_json::json!({}),
         };
         assert!(!tool_block.is_text());
         assert!(tool_block.is_tool_use());
@@ -906,7 +919,9 @@ mod tests {
 
     #[test]
     fn test_content_block_serialization() {
-        let text = ContentBlock::Text { text: "hello".to_string() };
+        let text = ContentBlock::Text {
+            text: "hello".to_string(),
+        };
         let json = serde_json::to_string(&text).unwrap();
         assert!(json.contains("\"type\":\"text\""));
 

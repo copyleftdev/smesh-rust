@@ -49,3 +49,7 @@ tarpaulin-report.html
 
 # Reference repos (cloned for analysis, not tracked)
 reference/
+
+# Claude Code local settings (keep settings.json, ignore local overrides)
+.claude/settings.local.json
+CLAUDE.local.md

@@ -1,6 +1,6 @@
 use anyhow::Result;
 use smesh_agent::{OllamaClient, OllamaConfig};
-use smesh_core::{Field, Node, Signal, SignalType};
+use smesh_core::{Field, FindingPayloadCompact, Node, Signal, SignalType};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -106,8 +106,10 @@ pub async fn run_review(repo_path: &Path, model: &str) -> Result<Vec<Finding>> {
     println!("📂 Found {} Rust files to review\n", rust_files.len());
 
     // Initialize Ollama client
-    let mut config = OllamaConfig::default();
-    config.model = model.to_string();
+    let config = OllamaConfig {
+        model: model.to_string(),
+        ..Default::default()
+    };
     let client = OllamaClient::new(config);
 
     // Check Ollama connection
@@ -125,21 +127,12 @@ pub async fn run_review(repo_path: &Path, model: &str) -> Result<Vec<Finding>> {
             .display()
             .to_string();
 
-        println!(
-            "─────────────────────────────────────────────────────────"
-        );
-        println!(
-            "📄 [{}/{}] {}",
-            idx + 1,
-            rust_files.len(),
-            relative_path
-        );
-        println!(
-            "─────────────────────────────────────────────────────────"
-        );
+        println!("─────────────────────────────────────────────────────────");
+        println!("📄 [{}/{}] {}", idx + 1, rust_files.len(), relative_path);
+        println!("─────────────────────────────────────────────────────────");
 
         let code = fs::read_to_string(file_path)?;
-        
+
         // Skip very small files
         if code.lines().count() < 10 {
             println!("   ⏭️  Skipping (< 10 lines)\n");
@@ -152,7 +145,7 @@ pub async fn run_review(repo_path: &Path, model: &str) -> Result<Vec<Finding>> {
             .intensity(1.0)
             .confidence(1.0)
             .build();
-        
+
         field.emit_anonymous(file_signal.clone());
         println!("   📡 Emitted FILE_READY signal (intensity: 1.0)");
 
@@ -185,8 +178,14 @@ pub async fn run_review(repo_path: &Path, model: &str) -> Result<Vec<Finding>> {
                         || response.to_lowercase().contains("should");
 
                     if has_issues && response.len() > 50 {
+                        // Use TOON format for compact signal payload (20% token savings)
+                        let finding_payload = FindingPayloadCompact {
+                            f: relative_path.clone(),
+                            r: format!("{:?}", reviewer_type).to_lowercase(),
+                            c: 0.7,
+                        };
                         let finding_signal = Signal::builder(reviewer_type.signal_type())
-                            .payload(response.as_bytes().to_vec())
+                            .payload_toon(&finding_payload)
                             .intensity(0.8)
                             .confidence(0.7)
                             .build();
@@ -245,8 +244,9 @@ pub async fn run_review(repo_path: &Path, model: &str) -> Result<Vec<Finding>> {
             println!("🔹 {:?} Findings ({}):", reviewer_type, type_findings.len());
             for finding in type_findings {
                 println!("   File: {}", finding.file);
-                println!("   Confidence: {:.0}% (reinforced {}x)", 
-                    finding.confidence * 100.0, 
+                println!(
+                    "   Confidence: {:.0}% (reinforced {}x)",
+                    finding.confidence * 100.0,
                     finding.reinforcements
                 );
                 println!("   ───");
@@ -271,8 +271,8 @@ pub async fn run_review(repo_path: &Path, model: &str) -> Result<Vec<Finding>> {
 /// Collect all .rs files in a directory
 fn collect_rust_files(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
     let mut files = Vec::new();
-    
-    if dir.is_file() && dir.extension().map_or(false, |e| e == "rs") {
+
+    if dir.is_file() && dir.extension().is_some_and(|e| e == "rs") {
         files.push(dir.to_path_buf());
         return Ok(files);
     }
@@ -280,7 +280,7 @@ fn collect_rust_files(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
-        
+
         // Skip hidden dirs, target, tests for now
         if path.is_dir() {
             let name = path.file_name().unwrap_or_default().to_string_lossy();
@@ -288,7 +288,7 @@ fn collect_rust_files(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
                 continue;
             }
             files.extend(collect_rust_files(&path)?);
-        } else if path.extension().map_or(false, |e| e == "rs") {
+        } else if path.extension().is_some_and(|e| e == "rs") {
             files.push(path);
         }
     }
@@ -306,19 +306,16 @@ fn truncate_code(code: &str, max_chars: usize) -> &str {
 }
 
 /// Simulate reinforcement from other nodes
-fn simulate_reinforcement(
-    nodes: &HashMap<ReviewerType, Node>,
-    source: &ReviewerType,
-) -> u32 {
+fn simulate_reinforcement(nodes: &HashMap<ReviewerType, Node>, source: &ReviewerType) -> u32 {
     // In a real system, other nodes would actually evaluate the finding
     // For now, simulate based on reviewer type correlations
     let mut reinforcements = 0;
-    
-    for (other_type, _node) in nodes {
+
+    for other_type in nodes.keys() {
         if other_type == source {
             continue;
         }
-        
+
         // Security and Performance often agree
         // Style and Documentation often agree
         let agrees = matches!(
@@ -328,12 +325,12 @@ fn simulate_reinforcement(
                 | (ReviewerType::Style, ReviewerType::Documentation)
                 | (ReviewerType::Documentation, ReviewerType::Style)
         );
-        
+
         // Simple deterministic reinforcement for demo
         if agrees {
             reinforcements += 1;
         }
     }
-    
+
     reinforcements
 }

@@ -11,45 +11,57 @@
 //! - Agent nodes that use LLM for decision-making
 //! - Task coordination via SMESH signals
 
-pub mod backend;
-pub mod ollama;
-pub mod claude;
-pub mod streaming;
-pub mod constitutional;
 pub mod agent;
+pub mod backend;
+pub mod claude;
+pub mod constitutional;
 pub mod coordinator;
+pub mod ollama;
+pub mod streaming;
 
 // Core backend types
 pub use backend::{
-    LlmBackend, LlmError, LlmProvider,
-    GenerateRequest, GenerateResponse,
-    // V2 types for full API support
-    GenerateRequestV2, GenerateResponseV2,
-    Message, MessageRole, ContentBlock, ToolDefinition, ToolChoice, StopReason,
-    Conversation,
-    // Streaming types
-    StreamEvent, StreamResult, ContentDelta,
+    benchmark_backend,
+    compare_backends,
+    print_comparison,
     // Benchmarking
-    BenchmarkResult, benchmark_backend, compare_backends, print_comparison,
+    BenchmarkResult,
+    ContentBlock,
+    ContentDelta,
+    Conversation,
+    GenerateRequest,
+    // V2 types for full API support
+    GenerateRequestV2,
+    GenerateResponse,
+    GenerateResponseV2,
+    LlmBackend,
+    LlmError,
+    LlmProvider,
+    Message,
+    MessageRole,
+    StopReason,
+    // Streaming types
+    StreamEvent,
+    StreamResult,
+    ToolChoice,
+    ToolDefinition,
 };
 
 // LLM Backends
-pub use ollama::{OllamaClient, OllamaConfig};
 pub use claude::{ClaudeClient, ClaudeConfig};
+pub use ollama::{OllamaClient, OllamaConfig};
 
 // Streaming utilities
-pub use streaming::{parse_sse_event, parse_stop_reason, collect_text};
+pub use streaming::{collect_text, parse_sse_event, parse_stop_reason};
 
 // Constitutional AI
 pub use constitutional::{
-    ConstitutionalPrinciple, PrinciplePreset,
-    security_principles, quality_principles, smesh_principles,
-    apply_principles, security_system_prompt, comprehensive_system_prompt,
+    apply_principles, comprehensive_system_prompt, quality_principles, security_principles,
+    security_system_prompt, smesh_principles, ConstitutionalPrinciple, PrinciplePreset,
 };
 
 // Agent system
-pub use agent::{LlmAgent, AgentConfig, AgentRole, TaskType, AgentTask};
+pub use agent::{AgentConfig, AgentRole, AgentTask, LlmAgent, TaskType};
 pub use coordinator::{
-    AgentCoordinator, CoordinatorConfig, TaskDefinition, CoordinatorResult,
-    BackendFactory,
+    AgentCoordinator, BackendFactory, CoordinatorConfig, CoordinatorResult, TaskDefinition,
 };

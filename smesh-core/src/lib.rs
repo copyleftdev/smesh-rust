@@ -34,21 +34,26 @@
 //! field.emit(signal, &mut node);
 //! ```
 
-pub mod signal;
-pub mod node;
+pub mod error;
 pub mod field;
 pub mod network;
-pub mod trust;
+pub mod node;
+pub mod payload;
 pub mod reputation;
-pub mod error;
+pub mod signal;
+pub mod trust;
 
-pub use signal::{Signal, SignalType, DecayFunction, SignalBuilder};
-pub use node::{Node, NodeId, NodeConfig};
+pub use error::{Result, SmeshError};
 pub use field::Field;
-pub use network::{Network, NetworkTopology, Hypha};
-pub use trust::TrustModel;
+pub use network::{Hypha, Network, NetworkTopology};
+pub use node::{Node, NodeConfig, NodeId};
+pub use payload::{
+    AgentSignalType, FindingPayload, FindingPayloadCompact, TaskPayload, TaskPayloadCompact,
+    ThreatPayload, ThreatPayloadCompact,
+};
 pub use reputation::ReputationSystem;
-pub use error::{SmeshError, Result};
+pub use signal::{DecayFunction, Signal, SignalBuilder, SignalType};
+pub use trust::TrustModel;
 
 /// Protocol version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -60,7 +65,7 @@ pub const PROTOCOL_DNA: &str = "sm3sh:7f2a9c4e:ops";
 /// Compute the signal genome (DNA + payload fingerprint)
 /// This creates a unique, traceable identifier for signals from this build
 pub fn compute_signal_genome(payload_hash: &str) -> String {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(PROTOCOL_DNA.as_bytes());
     hasher.update(payload_hash.as_bytes());
