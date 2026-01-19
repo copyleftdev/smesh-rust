@@ -2,7 +2,9 @@
 //!
 //! Nodes can emit signals, sense the field, and maintain trust relationships.
 
+use rand::Rng;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -103,9 +105,18 @@ impl Node {
     /// Create a new node with custom configuration
     pub fn with_config(config: NodeConfig) -> Self {
         let id = Uuid::new_v4().to_string()[..8].to_string();
+
+        // Generate cryptographic public key using SHA256 hash of random bytes
+        // In production, this should be replaced with proper asymmetric key generation (e.g., Ed25519)
+        let mut rng = rand::thread_rng();
+        let random_bytes: [u8; 32] = rng.gen();
+        let mut hasher = Sha256::new();
+        hasher.update(random_bytes);
+        let public_key = format!("{:x}", hasher.finalize());
+
         Self {
             id: id.clone(),
-            public_key: Uuid::new_v4().to_string(),
+            public_key,
             compute_capacity: 1.0,
             bandwidth_capacity: 1.0,
             trust_scores: HashMap::new(),
@@ -169,8 +180,9 @@ impl Node {
         // Propagation score
         let prop_score = effective * origin_trust * (remaining_hops as f64 / signal.radius as f64);
 
-        // Probabilistic relay decision
-        let should_relay = rand::random::<f64>() < prop_score;
+        // Probabilistic relay decision using cryptographically secure RNG
+        let mut rng = rand::thread_rng();
+        let should_relay = rng.gen::<f64>() < prop_score;
         let dampening = if origin_trust > 0.7 { 0.9 } else { 0.7 };
 
         (should_relay, dampening)
