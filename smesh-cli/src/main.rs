@@ -15,7 +15,6 @@ use smesh_runtime::{RuntimeConfig, SmeshRuntime};
 
 mod review;
 mod swarm;
-mod threat;
 
 #[derive(Parser)]
 #[command(name = "smesh")]
@@ -108,19 +107,19 @@ enum Commands {
         model: String,
     },
 
-    /// Analyze threat patterns from security payload repositories
-    Threat {
-        /// Path to the payload repository (e.g., PayloadsAllTheThings)
-        #[arg(short, long)]
-        path: PathBuf,
+    /// Run multi-agent coding swarm (Claude-powered) - demonstrates SMESH coordination
+    Code {
+        /// Number of coder agents
+        #[arg(long, default_value = "2")]
+        coders: usize,
 
-        /// Ollama model to use
-        #[arg(short, long, default_value = "qwen2.5-coder:7b")]
-        model: String,
+        /// Consensus threshold (agents that must agree)
+        #[arg(long, default_value = "2")]
+        consensus: u32,
 
-        /// Maximum files to analyze (to limit token usage)
-        #[arg(short, long, default_value = "10")]
-        limit: usize,
+        /// Output format (text, json)
+        #[arg(short, long, default_value = "text")]
+        format: String,
     },
 
     /// Run multi-agent vulnerability swarm scan (Claude-powered)
@@ -178,11 +177,11 @@ async fn main() -> Result<()> {
             prompt,
         } => cmd_compare(&ollama_model, &claude_model, prompt.as_deref()).await,
         Commands::Review { path, model } => review::run_review(&path, &model).await.map(|_| ()),
-        Commands::Threat { path, model, limit } => {
-            threat::run_threat_analysis(&path, &model, limit)
-                .await
-                .map(|_| ())
-        }
+        Commands::Code {
+            coders,
+            consensus,
+            format,
+        } => cmd_code(coders, consensus, &format).await,
         Commands::Swarm {
             path,
             max_files,
@@ -226,6 +225,35 @@ async fn cmd_swarm(path: &Path, max_files: usize, format: &str, consensus: u32) 
         }
         OutputFormat::Text => {
             print_results(&result, false);
+        }
+    }
+
+    Ok(())
+}
+
+async fn cmd_code(num_coders: usize, consensus: u32, format: &str) -> Result<()> {
+    use swarm::{
+        coding_results_to_json, print_coding_results, CodingSwarmConfig, CodingSwarmCoordinator,
+    };
+
+    let mut config = CodingSwarmConfig::default();
+    config.num_coders = num_coders;
+    config.consensus_threshold = consensus;
+
+    let mut coordinator =
+        CodingSwarmCoordinator::new(config).map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    let result = coordinator
+        .run()
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    match format {
+        "json" => {
+            println!("{}", coding_results_to_json(&result));
+        }
+        _ => {
+            print_coding_results(&result);
         }
     }
 
