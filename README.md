@@ -93,7 +93,7 @@ smesh-rust/
 └── smesh-cli/       # CLI tools & benchmarks               ✓
 ```
 
-**All components complete.** 42 tests passing.
+**All components complete.** 80 tests passing.
 
 ---
 
@@ -153,7 +153,8 @@ smesh agents --demo       # LLM agent coordination demo
 smesh compare             # Benchmark Ollama vs Claude
 smesh bench               # Signal processing benchmarks
 smesh review --path ./repo    # SMESH-coordinated code review
-smesh threat --path ./payloads --limit 10  # Threat pattern analysis
+smesh code                # Multi-agent coding swarm (Claude)
+smesh swarm --path ./repo # Vulnerability scanning swarm
 ```
 
 ---
@@ -177,23 +178,33 @@ Agents emit findings as signals → related reviewers reinforce → consensus em
 
 ---
 
-## 🔥 Threat Intelligence (NEW)
+## 🌿 Coding Swarm (NEW)
 
-Analyze security payload repositories (e.g., PayloadsAllTheThings):
+Multi-agent collaborative coding that demonstrates true SMESH coordination:
 
 ```bash
-cargo run --bin smesh -- threat \
-  --path ./reference/PayloadsAllTheThings \
-  --model qwen2.5-coder:7b \
-  --limit 20
+cargo run --bin smesh -- code
+cargo run --bin smesh -- code --coders 3 --format json
 ```
 
-Automatically categorizes threats: **Injection**, **XSS**, **Deserialization**, **Traversal**, **SSRF**, etc.
+| Agent | Role |
+|-------|------|
+| **Architect** | Designs module structure, defines interfaces |
+| **Coder** (2x) | Implements code from specs |
+| **Tester** | Writes and runs tests |
+| **Reviewer** | Reviews code quality |
 
-Extracts:
-- Attack patterns and example payloads
-- Severity classification (CRITICAL/HIGH/MEDIUM/LOW)
-- Mitigation recommendations
+**SMESH concepts in action:**
+- 📡 **Signal coordination** — Agents emit Task, Claim, Code, Review, TestResult signals
+- 🤝 **Emergent consensus** — Modules complete when review + tests agree
+- 📊 **Trust evolution** — Trust scores change based on code acceptance and test results
+
+```
+Trust Evolution:
+  Reviewer→Coder-A [███████   ] 0.70  (code approved)
+  Tester→Coder-A   [████      ] 0.45  (1 pass, 1 fail)
+  Tester→Coder-B   [█         ] 0.20  (2 fails)
+```
 
 ---
 
