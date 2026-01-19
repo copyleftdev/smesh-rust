@@ -432,6 +432,27 @@ impl VulnSwarmCoordinator {
                 conf * 100.0
             );
 
+            // Check for immediate consensus (threshold=1)
+            if finding.has_consensus(
+                self.config.consensus_threshold,
+                self.config.high_confidence_threshold,
+            ) {
+                let consensus = ConsensusFinding::from_finding(
+                    finding.clone(),
+                    finding.found_at,
+                    self.tick_count,
+                );
+                self.metrics.record_consensus(&consensus);
+                self.consensus_findings.push(consensus);
+
+                println!(
+                    "\n  \x1b[1;32mCONSENSUS: {} - {} (single agent, threshold={})\x1b[0m\n",
+                    finding.vuln_type,
+                    finding.file_path,
+                    self.config.consensus_threshold
+                );
+            }
+
             self.findings.insert(dedup_id, finding);
         }
     }
