@@ -1,0 +1,24 @@
+[package]
+name = "smesh-rust"
+version = "0.1.0"
+edition = "2021"
+authors = ["copyleftdev"]
+description = "Signal-based Mesh Orchestration — decentralized concurrent call management, retry logic, priority routing, and adaptive learning"
+license = "MIT"
+repository = "https://github.com/copyleftdev/smesh-rust"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+thiserror = "2"
+anyhow = "1"
+toml = "0.8"
+
+[dev-dependencies]
+tokio-test = "0.4"
