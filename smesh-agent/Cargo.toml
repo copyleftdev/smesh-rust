@@ -1,0 +1,19 @@
+[package]
+name = "smesh-agent"
+version.workspace = true
+edition.workspace = true
+description = "LLM agent integration for SMESH protocol"
+
+[dependencies]
+smesh-core = { path = "../smesh-core" }
+smesh-runtime = { path = "../smesh-runtime" }
+tokio = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }

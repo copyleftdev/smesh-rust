@@ -1,0 +1,33 @@
+# CLAUDE.local.md Template
+
+Copy this file to `CLAUDE.local.md` for local settings (gitignored).
+
+## Local Environment
+
+```bash
+# Ollama host (if not default)
+export OLLAMA_HOST="http://localhost:11434"
+
+# Anthropic API key for Claude backend
+export ANTHROPIC_API_KEY="sk-ant-..."
+
+# Brave Search API key (for MCP server)
+export BRAVE_API_KEY="..."
+```
+
+## Personal Preferences
+
+Add your personal coding preferences here:
+
+- Preferred test runner flags
+- Custom aliases
+- IDE-specific notes
+
+## Local Paths
+
+If you have local model paths or custom configurations:
+
+```bash
+# Example: Local model cache
+export OLLAMA_MODELS="/path/to/models"
+```

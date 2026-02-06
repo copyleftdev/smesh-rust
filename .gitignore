@@ -1,1 +1,55 @@
-/target
+# Build artifacts
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment and secrets
+.env
+.env.*
+*.pem
+*.key
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs and debug
+*.log
+debug/
+
+# Hypothesis (Python prototype folder - sibling directory)
+# Note: hypothesis/ is in parent directory, not tracked in this repo
+
+# Benchmark artifacts
+*.profraw
+*.profdata
+perf.data*
+
+# Test coverage
+coverage/
+*.gcno
+*.gcda
+lcov.info
+tarpaulin-report.html
+
+# Documentation build
+/target/doc/
+
+# Temporary files
+*.tmp
+*.bak
+*.orig
+
+# Reference repos (cloned for analysis, not tracked)
+reference/
+
+# Claude Code local settings (keep settings.json, ignore local overrides)
+.claude/settings.local.json
+CLAUDE.local.md
