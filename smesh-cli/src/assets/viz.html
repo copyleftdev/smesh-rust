@@ -185,6 +185,7 @@ nav .nav-r a:hover{color:var(--text)}
     <div class="tab" data-tab="4">FUZZ SWARM</div>
     <div class="tab" data-tab="5">DARK POOL</div>
     <div class="tab" data-tab="6">CI/CD SUPPLY</div>
+    <div class="tab" data-tab="7">TALENT HUNT</div>
   </div>
   <div id="viz-ui">
     <div id="v-hud">
@@ -202,7 +203,7 @@ nav .nav-r a:hover{color:var(--text)}
     </div>
     <div id="v-ticker"></div>
     <div id="v-prov">Not a simulation. Derived from strace -f -c kernel capture.<br>Syscall counts are real. Decay: I(t) = I₀·e⁻ᵏᵗ</div>
-    <div id="v-keys">SPACE pause · +/- speed · R restart · ESC exit · 1-7 missions</div>
+    <div id="v-keys">SPACE pause · +/- speed · R restart · ESC exit · 1-8 missions</div>
   </div>
   <canvas id="c"></canvas>
 </div>
@@ -233,6 +234,7 @@ nav .nav-r a:hover{color:var(--text)}
     {label:'Fuzz Swarm',sub:'2.1M syscalls · 30s',col:'#ff6633',idx:4,glow:.3,halo:0},
     {label:'Dark Pool',sub:'10K trades · Polygon.io',col:'#e8a030',idx:5,glow:.3,halo:0},
     {label:'CI/CD Supply',sub:'33 workflows · next.js',col:'#82aaff',idx:6,glow:.3,halo:0},
+    {label:'Talent Hunt',sub:'Zig security · dream team',col:'#34d399',idx:7,glow:.3,halo:0},
   ];
   const medges=[],mparticles=[],mstars=[];
   let hover=-1;
@@ -660,9 +662,80 @@ reinforcements:[
 ...Array.from({length:14},(_,i)=>({t:118+i*3,a:'CON',b:['INJ','PRM','ACT','SEC','TRG','CTR','CHA','INJ','PRM','ACT','SEC','TRG','CTR','CHA'][i]})),
 ],
 storm:{id:'INJ',t0:0,t1:25,rate:.5,col:'#f8717144'}},
+
+{name:'TALENT HUNT',sub:'67K syscalls · gh CLI · Zig security engineers · dream team assembly',tt:200,
+phases:[
+{id:'SCT',ti:1,t0:0,t1:25,l:'REPO SCOUT',d:'gh search repos · language:zig · 50 repos',sc:12000},
+{id:'DOM',ti:1,t0:10,t1:35,l:'DOMAIN MAPPER',d:'tls · pcap · crypto · allocator repos',sc:10000},
+{id:'PRF',ti:1,t0:20,t1:55,l:'PROFILER',d:'gh api users · repos · followers · bio',sc:18000},
+{id:'ACT',ti:1,t0:30,t1:65,l:'ACTIVITY SCAN',d:'events · commits · contribution graph',sc:15000},
+{id:'SKL',ti:2,t0:50,t1:90,l:'SKILL MAPPER',d:'language mix · security depth · systems level',sc:5000},
+{id:'FIT',ti:2,t0:65,t1:110,l:'TEAM FIT',d:'complementary skills · timezone · OSS ethos',sc:3000},
+{id:'RNK',ti:2,t0:90,t1:130,l:'RANK ENGINE',d:'weighted score · stars + commits + domain',sc:2000},
+{id:'CON',ti:3,t0:135,t1:185,l:'DREAM TEAM',d:'consensus assembly · 5 engineers',sc:100},
+],
+outer:['andrewrk','mitchellh','copyleftdev','ifreund','kristoff-it','melonedo','fengb','nektro','tigerbeetle','ghostty','bun','lightpanda','zentinel','floq','tailx','zig-tls','zee_alloc','zig-pcap','libxev','zls','microzig','river','roc-lang','mach','capy-ui','zig-book','zml','dockerc','cubyz','nullclaw'],
+ol:'CANDIDATES & REPOS',
+findings:[
+// repo scout
+{t:5,f:'SCT',s:'INFO',m:'50 Zig repos indexed (88K→0 stars)'},
+{t:8,f:'SCT',s:'MEDIUM',m:'bun 88K★ · ghostty 49K★ · zig 42K★'},
+{t:12,f:'SCT',s:'HIGH',m:'tigerbeetle 15K★ — financial txn DB (security critical)'},
+{t:15,f:'SCT',s:'MEDIUM',m:'lightpanda 26K★ — headless browser (attack surface)'},
+// domain mapper
+{t:18,f:'DOM',s:'HIGH',m:'zig-tls12 30★ — TLS implementation (crypto depth)'},
+{t:22,f:'DOM',s:'MEDIUM',m:'zee_alloc 94★ — custom allocator (memory safety)'},
+{t:25,f:'DOM',s:'MEDIUM',m:'zig-pcapfile 8★ — packet parsing (network sec)'},
+{t:28,f:'DOM',s:'HIGH',m:'zentinel — static analysis engine (security tooling)'},
+{t:30,f:'DOM',s:'HIGH',m:'floq — Floquet spectral C2 detection (physics+sec)'},
+// profiler
+{t:35,f:'PRF',s:'HIGH',m:'andrewrk: 226 repos · 10K followers · Zig creator'},
+{t:38,f:'PRF',s:'HIGH',m:'mitchellh: 116 repos · 21K followers · HashiCorp founder'},
+{t:42,f:'PRF',s:'MEDIUM',m:'copyleftdev: 598 repos · security tooling in Zig+Rust'},
+{t:45,f:'PRF',s:'MEDIUM',m:'kristoff-it: 118 repos · 1.4K followers · Zig core'},
+{t:48,f:'PRF',s:'INFO',m:'melonedo: TLS12 implementation — deep crypto'},
+// activity
+{t:52,f:'ACT',s:'MEDIUM',m:'copyleftdev: 3 security tools shipped in 30 days'},
+{t:56,f:'ACT',s:'INFO',m:'mitchellh: libxev event loop (systems perf)'},
+{t:60,f:'ACT',s:'INFO',m:'andrewrk: Zig compiler daily commits'},
+// skill mapper
+{t:55,f:'SKL',s:'HIGH',m:'SIGNAL: Zig + security + systems = rare intersection'},
+{t:62,f:'SKL',s:'HIGH',m:'copyleftdev: static analysis + spectral + log cognition'},
+{t:68,f:'SKL',s:'MEDIUM',m:'melonedo: TLS from scratch — crypto implementation'},
+{t:72,f:'SKL',s:'MEDIUM',m:'tigerbeetle team: consensus protocols + Zig'},
+// team fit
+{t:75,f:'FIT',s:'HIGH',m:'copyleftdev × zentinel: fills static analysis seat'},
+{t:80,f:'FIT',s:'HIGH',m:'melonedo × zig-tls: fills crypto/TLS seat'},
+{t:85,f:'FIT',s:'MEDIUM',m:'tigerbeetle eng: fills consensus/distributed seat'},
+{t:90,f:'FIT',s:'MEDIUM',m:'fengb × zee_alloc: fills memory safety seat'},
+// rank engine
+{t:95,f:'RNK',s:'HIGH',m:'#1: security depth + shipped tools + Zig native'},
+{t:100,f:'RNK',s:'MEDIUM',m:'#2: crypto implementation + TLS expertise'},
+{t:105,f:'RNK',s:'MEDIUM',m:'#3: consensus protocols + financial systems'},
+{t:110,f:'RNK',s:'MEDIUM',m:'#4: memory safety + allocator design'},
+{t:115,f:'RNK',s:'INFO',m:'#5: network stack + packet parsing'},
+// dream team consensus
+{t:140,f:'CON',s:'CRITICAL',m:'DREAM TEAM ASSEMBLED: 5 engineers'},
+{t:145,f:'CON',s:'HIGH',m:'Seat 1: Security Tooling — static analysis + spectral'},
+{t:150,f:'CON',s:'HIGH',m:'Seat 2: Crypto Engineer — TLS + primitives'},
+{t:155,f:'CON',s:'HIGH',m:'Seat 3: Distributed Systems — consensus + txn safety'},
+{t:160,f:'CON',s:'HIGH',m:'Seat 4: Memory Safety — allocator + sandbox'},
+{t:165,f:'CON',s:'HIGH',m:'Seat 5: Network Security — packet analysis + pcap'},
+{t:170,f:'CON',s:'CRITICAL',m:'ALL SEATS FILLED — Zig security dream team locked'},
+{t:175,f:'CON',s:'HIGH',m:'67K syscalls · 100% gh CLI · zero manual search'},
+],
+reinforcements:[
+{t:20,a:'DOM',b:'SCT'},{t:32,a:'DOM',b:'SCT'},{t:40,a:'PRF',b:'DOM'},
+{t:50,a:'ACT',b:'PRF'},{t:58,a:'SKL',b:'DOM'},{t:64,a:'SKL',b:'PRF'},
+{t:70,a:'SKL',b:'ACT'},{t:78,a:'FIT',b:'SKL'},{t:83,a:'FIT',b:'PRF'},
+{t:88,a:'FIT',b:'ACT'},{t:98,a:'RNK',b:'SKL'},{t:103,a:'RNK',b:'FIT'},
+{t:108,a:'RNK',b:'PRF'},{t:112,a:'RNK',b:'DOM'},
+...Array.from({length:14},(_,i)=>({t:138+i*3,a:'CON',b:['SCT','DOM','PRF','ACT','SKL','FIT','RNK','SCT','DOM','PRF','ACT','SKL','FIT','RNK'][i]})),
+],
+storm:{id:'SCT',t0:0,t1:25,rate:.5,col:'#82aaff33'}},
 ];
 
-const T1L=['DRAGNET','SCANNERS','HUNTERS','OSI LAYERS','FUZZERS','CLASSIFIERS','SCANNERS'],T2L=['DEEP ANALYSIS','CORRELATOR','DEEP CORRELATION','FLOW CORRELATION','CRASH TRIAGE','CROSS-TICKER','CHAIN ANALYSIS'];
+const T1L=['DRAGNET','SCANNERS','HUNTERS','OSI LAYERS','FUZZERS','CLASSIFIERS','SCANNERS','SCOUTING'],T2L=['DEEP ANALYSIS','CORRELATOR','DEEP CORRELATION','FLOW CORRELATION','CRASH TRIAGE','CROSS-TICKER','CHAIN ANALYSIS','TEAM FIT'];
 
 function initStars(){starField.length=0;for(let i=0;i<300;i++)starField.push({x:Math.random()*W,y:Math.random()*H,r:Math.random()*1.2+.2,speed:.02+Math.random()*.08,alpha:.1+Math.random()*.3,tw:Math.random()*Math.PI*2})}
 
@@ -749,7 +822,7 @@ if(e.key==='+'||e.key==='=')speed=Math.min(speed*1.5,30);
 if(e.key==='-')speed=Math.max(speed/1.5,.5);
 if(e.key==='r'||e.key==='R')resetState();
 if(e.key==='Escape')exitViz();
-if(e.key>='1'&&e.key<='7')switchTab(+e.key-1);
+if(e.key>='1'&&e.key<='8')switchTab(+e.key-1);
 });
 } // end initViz
 </script>
