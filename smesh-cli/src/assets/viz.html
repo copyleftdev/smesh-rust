@@ -186,6 +186,7 @@ nav .nav-r a:hover{color:var(--text)}
     <div class="tab" data-tab="5">DARK POOL</div>
     <div class="tab" data-tab="6">CI/CD SUPPLY</div>
     <div class="tab" data-tab="7">TALENT HUNT</div>
+    <div class="tab" data-tab="8">PR SENTIMENT</div>
   </div>
   <div id="viz-ui">
     <div id="v-hud">
@@ -203,7 +204,7 @@ nav .nav-r a:hover{color:var(--text)}
     </div>
     <div id="v-ticker"></div>
     <div id="v-prov">Not a simulation. Derived from strace -f -c kernel capture.<br>Syscall counts are real. Decay: I(t) = I₀·e⁻ᵏᵗ</div>
-    <div id="v-keys">SPACE pause · +/- speed · R restart · ESC exit · 1-8 missions</div>
+    <div id="v-keys">SPACE pause · +/- speed · R restart · ESC exit · 1-9 missions</div>
   </div>
   <canvas id="c"></canvas>
 </div>
@@ -235,6 +236,7 @@ nav .nav-r a:hover{color:var(--text)}
     {label:'Dark Pool',sub:'10K trades · Polygon.io',col:'#e8a030',idx:5,glow:.3,halo:0},
     {label:'CI/CD Supply',sub:'33 workflows · next.js',col:'#82aaff',idx:6,glow:.3,halo:0},
     {label:'Talent Hunt',sub:'Zig security · dream team',col:'#34d399',idx:7,glow:.3,halo:0},
+    {label:'PR Sentiment',sub:'800 comments · 8 repos',col:'#c792ea',idx:8,glow:.3,halo:0},
   ];
   const medges=[],mparticles=[],mstars=[];
   let hover=-1;
@@ -733,9 +735,76 @@ reinforcements:[
 ...Array.from({length:14},(_,i)=>({t:138+i*3,a:'CON',b:['SCT','DOM','PRF','ACT','SKL','FIT','RNK','SCT','DOM','PRF','ACT','SKL','FIT','RNK'][i]})),
 ],
 storm:{id:'SCT',t0:0,t1:25,rate:.5,col:'#82aaff33'}},
+
+{name:'PR SENTIMENT',sub:'739 syscalls · 800 comments · 8 repos · NLP sentiment + toxicity + burnout',tt:180,
+phases:[
+{id:'ING',ti:1,t0:0,t1:15,l:'INGESTER',d:'800 PR comments · 8 repos · gh CLI',sc:200},
+{id:'SNT',ti:1,t0:10,t1:40,l:'SENTIMENT',d:'lexicon scoring · pos/neg/neutral',sc:150},
+{id:'TOX',ti:1,t0:20,t1:55,l:'TOXICITY',d:'hostility · dismissive · frustration',sc:120},
+{id:'BRN',ti:1,t0:25,t1:60,l:'BURNOUT',d:'terse replies · fatigue · overload',sc:100},
+{id:'CEL',ti:2,t0:40,t1:75,l:'CELEBRATION',d:'gratitude · welcome · approval',sc:80},
+{id:'XRP',ti:2,t0:55,t1:100,l:'CROSS-REPO',d:'health scoring · ecosystem ranking',sc:60},
+{id:'TMR',ti:2,t0:70,t1:110,l:'TEMPORAL',d:'day-of-week · staleness · velocity',sc:50},
+{id:'CON',ti:3,t0:115,t1:165,l:'CONSENSUS',d:'ecosystem health verdicts',sc:30},
+],
+outer:['kubernetes','rust-lang','react','golang','linux','next.js','node','cpython','pos:12','pos:9','neg:15','neg:14','toxic:3','toxic:2','burnout:5','burnout:4','celebrate:8','celebrate:4','health:54','health:46','lgtm','nack','sigh','thanks','dismissed','approved','terse','fatigue','gratitude','welcome'],
+ol:'REPOS & SIGNALS',
+findings:[
+// ingester
+{t:3,f:'ING',s:'INFO',m:'kubernetes: 100 comments loaded'},
+{t:4,f:'ING',s:'INFO',m:'rust-lang: 100 comments loaded'},
+{t:5,f:'ING',s:'INFO',m:'react + golang + linux + next.js + node + cpython'},
+// sentiment
+{t:15,f:'SNT',s:'MEDIUM',m:'rust-lang: avg=-0.080 (most negative)'},
+{t:17,f:'SNT',s:'MEDIUM',m:'next.js: avg=-0.080 (tied negative)'},
+{t:19,f:'SNT',s:'INFO',m:'linux: avg=+0.060 (most positive)'},
+{t:21,f:'SNT',s:'INFO',m:'kubernetes: avg=+0.060 (tied positive)'},
+// toxicity
+{t:28,f:'TOX',s:'MEDIUM',m:'golang: 3 toxic — dismissive patterns'},
+{t:31,f:'TOX',s:'MEDIUM',m:'next.js: 2 toxic — dismissive language'},
+{t:33,f:'TOX',s:'MEDIUM',m:'node: 2 toxic — dismissive patterns'},
+{t:35,f:'TOX',s:'MEDIUM',m:'cpython: 2 toxic — hostility detected'},
+{t:37,f:'TOX',s:'INFO',m:'linux: 1 toxic — hostility (Linus mellowed)'},
+// burnout
+{t:30,f:'BRN',s:'HIGH',m:'kubernetes: 5 fatigue signals (highest)'},
+{t:34,f:'BRN',s:'MEDIUM',m:'node: 4 fatigue signals'},
+{t:38,f:'BRN',s:'MEDIUM',m:'rust-lang: 3 fatigue signals'},
+{t:42,f:'BRN',s:'MEDIUM',m:'cpython: 2 fatigue signals'},
+{t:45,f:'BRN',s:'INFO',m:'react + linux + next.js: 0 burnout'},
+// celebration
+{t:48,f:'CEL',s:'HIGH',m:'linux: 8 celebration signals (most welcoming)'},
+{t:52,f:'CEL',s:'MEDIUM',m:'kubernetes: 4 gratitude signals'},
+{t:55,f:'CEL',s:'MEDIUM',m:'golang: 4 approval signals'},
+{t:58,f:'CEL',s:'INFO',m:'react: 0 celebration (neutral culture)'},
+// cross-repo health
+{t:65,f:'XRP',s:'CRITICAL',m:'HEALTHIEST: torvalds/linux 54/100'},
+{t:68,f:'XRP',s:'HIGH',m:'#2 kubernetes 51/100 · #3 react 50/100'},
+{t:72,f:'XRP',s:'HIGH',m:'#7 node 46/100 · #8 rust-lang 46/100'},
+{t:75,f:'XRP',s:'CRITICAL',m:'MOST AT-RISK: rust-lang/rust 46/100'},
+{t:78,f:'XRP',s:'MEDIUM',m:'golang 48/100 — dismissive culture'},
+// temporal
+{t:82,f:'TMR',s:'MEDIUM',m:'burnout clusters on Mondays (return from weekend)'},
+{t:86,f:'TMR',s:'INFO',m:'celebration peaks mid-week (merge day)'},
+// consensus
+{t:120,f:'CON',s:'CRITICAL',m:'VERDICT: linux > k8s > react > cpython > go > next > node > rust'},
+{t:125,f:'CON',s:'HIGH',m:'13 toxic signals across 800 comments (1.6%)'},
+{t:130,f:'CON',s:'HIGH',m:'15 burnout signals — kubernetes most affected'},
+{t:135,f:'CON',s:'CRITICAL',m:'rust-lang: negative sentiment + burnout + dismissive = at-risk'},
+{t:140,f:'CON',s:'HIGH',m:'linux: most celebration + lowest toxicity = healthiest'},
+{t:145,f:'CON',s:'MEDIUM',m:'react: zero celebration + zero burnout = disengaged'},
+{t:150,f:'CON',s:'HIGH',m:'739 syscalls · 102ms · 8 ecosystems scored'},
+],
+reinforcements:[
+{t:22,a:'SNT',b:'ING'},{t:32,a:'TOX',b:'SNT'},{t:40,a:'BRN',b:'SNT'},
+{t:44,a:'BRN',b:'TOX'},{t:50,a:'CEL',b:'SNT'},{t:56,a:'CEL',b:'BRN'},
+{t:62,a:'XRP',b:'SNT'},{t:66,a:'XRP',b:'TOX'},{t:70,a:'XRP',b:'BRN'},
+{t:74,a:'XRP',b:'CEL'},{t:80,a:'TMR',b:'XRP'},{t:88,a:'TMR',b:'BRN'},
+...Array.from({length:14},(_,i)=>({t:118+i*3,a:'CON',b:['ING','SNT','TOX','BRN','CEL','XRP','TMR','ING','SNT','TOX','BRN','CEL','XRP','TMR'][i]})),
+],
+storm:{id:'ING',t0:0,t1:15,rate:.7,col:'#82aaff33'}},
 ];
 
-const T1L=['DRAGNET','SCANNERS','HUNTERS','OSI LAYERS','FUZZERS','CLASSIFIERS','SCANNERS','SCOUTING'],T2L=['DEEP ANALYSIS','CORRELATOR','DEEP CORRELATION','FLOW CORRELATION','CRASH TRIAGE','CROSS-TICKER','CHAIN ANALYSIS','TEAM FIT'];
+const T1L=['DRAGNET','SCANNERS','HUNTERS','OSI LAYERS','FUZZERS','CLASSIFIERS','SCANNERS','SCOUTING','NLP SCORING'],T2L=['DEEP ANALYSIS','CORRELATOR','DEEP CORRELATION','FLOW CORRELATION','CRASH TRIAGE','CROSS-TICKER','CHAIN ANALYSIS','TEAM FIT','CROSS-REPO'];
 
 function initStars(){starField.length=0;for(let i=0;i<300;i++)starField.push({x:Math.random()*W,y:Math.random()*H,r:Math.random()*1.2+.2,speed:.02+Math.random()*.08,alpha:.1+Math.random()*.3,tw:Math.random()*Math.PI*2})}
 
@@ -822,7 +891,7 @@ if(e.key==='+'||e.key==='=')speed=Math.min(speed*1.5,30);
 if(e.key==='-')speed=Math.max(speed/1.5,.5);
 if(e.key==='r'||e.key==='R')resetState();
 if(e.key==='Escape')exitViz();
-if(e.key>='1'&&e.key<='8')switchTab(+e.key-1);
+if(e.key>='1'&&e.key<='9')switchTab(+e.key-1);
 });
 } // end initViz
 </script>
