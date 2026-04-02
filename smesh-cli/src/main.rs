@@ -15,6 +15,7 @@ use smesh_runtime::{RuntimeConfig, SmeshRuntime};
 
 mod review;
 mod swarm;
+mod viz;
 
 #[derive(Parser)]
 #[command(name = "smesh")]
@@ -122,6 +123,66 @@ enum Commands {
         format: String,
     },
 
+    /// Serve the SMESH signal field visualization (single binary, zero deps)
+    Viz {
+        /// Port to serve on
+        #[arg(short, long, default_value = "8080")]
+        port: u16,
+    },
+
+    /// Run web red team mission against a live target (authorized testing only)
+    Redteam {
+        /// Target domain (e.g., example.com)
+        #[arg(short, long)]
+        target: String,
+    },
+
+    /// Full spectrum SMESH-coordinated red team (all tiers + Claude analysis)
+    Fullscan {
+        /// Target domain (e.g., example.com)
+        #[arg(short, long)]
+        target: String,
+
+        /// Skip JavaScript static analysis (faster)
+        #[arg(long, default_value = "false")]
+        no_js: bool,
+
+        /// Run Claude exploitability analysis on findings
+        #[arg(long, default_value = "false")]
+        analyze: bool,
+
+        /// Generate full report via Claude
+        #[arg(long, default_value = "false")]
+        report: bool,
+    },
+
+    /// Run security bounty hunting swarm (SMESH + Claude + Tools)
+    Bounty {
+        /// Path to scan for vulnerabilities
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+
+        /// Maximum files to analyze
+        #[arg(long, default_value = "50")]
+        max_files: usize,
+
+        /// Output format (text, json, markdown)
+        #[arg(short, long, default_value = "text")]
+        format: String,
+
+        /// Consensus threshold (agents that must agree)
+        #[arg(long, default_value = "2")]
+        consensus: u32,
+
+        /// Quick scan mode (fewer agents, faster)
+        #[arg(long, default_value = "false")]
+        quick: bool,
+
+        /// Claude model to use
+        #[arg(long, default_value = "claude-sonnet-4-20250514")]
+        model: String,
+    },
+
     /// Run multi-agent vulnerability swarm scan (Claude-powered)
     Swarm {
         /// Path to scan for vulnerabilities
@@ -182,6 +243,22 @@ async fn main() -> Result<()> {
             consensus,
             format,
         } => cmd_code(coders, consensus, &format).await,
+        Commands::Viz { port } => {
+            viz::serve(port)?;
+            Ok(())
+        }
+        Commands::Redteam { target } => cmd_redteam(&target).await,
+        Commands::Fullscan { target, no_js, analyze, report } => {
+            cmd_fullscan(&target, no_js, analyze, report).await
+        }
+        Commands::Bounty {
+            path,
+            max_files,
+            format,
+            consensus,
+            quick,
+            model,
+        } => cmd_bounty(&path, max_files, &format, consensus, quick, &model).await,
         Commands::Swarm {
             path,
             max_files,
@@ -189,6 +266,105 @@ async fn main() -> Result<()> {
             consensus,
         } => cmd_swarm(&path, max_files, &format, consensus).await,
     }
+}
+
+async fn cmd_fullscan(target: &str, no_js: bool, analyze: bool, report: bool) -> Result<()> {
+    use smesh_bounty::{FullSpectrumConfig, run_full_spectrum, analyze_exploitability, generate_report};
+
+    let mut config = FullSpectrumConfig::full(target);
+    if no_js {
+        config.js_analysis = false;
+    }
+
+    let result = run_full_spectrum(config)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    // Claude analysis if requested
+    if analyze || report {
+        let analyzed = analyze_exploitability(&result.correlated_findings, target)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+        if report {
+            let report_text = generate_report(
+                &result.correlated_findings,
+                &analyzed,
+                target,
+                &result.subdomains,
+                result.endpoints.len(),
+                result.duration.as_secs_f64(),
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+            // Save report
+            let report_path = result.work_dir.join("report.md");
+            std::fs::write(&report_path, &report_text)
+                .map_err(|e| anyhow::anyhow!("Failed to write report: {}", e))?;
+            println!("\n  Report saved to: {}\n", report_path.display());
+        }
+    }
+
+    Ok(())
+}
+
+async fn cmd_redteam(target: &str) -> Result<()> {
+    smesh_bounty::run_web_redteam(target)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    Ok(())
+}
+
+async fn cmd_bounty(
+    path: &Path,
+    max_files: usize,
+    format: &str,
+    consensus: u32,
+    quick: bool,
+    model: &str,
+) -> Result<()> {
+    use smesh_bounty::{BountyConfig, BountyCoordinator, OutputFormat as BountyOutputFormat};
+
+    let config = if quick {
+        BountyConfig::quick(path)
+            .with_model(model)
+            .with_consensus(consensus)
+    } else {
+        BountyConfig::new(path)
+            .with_model(model)
+            .with_consensus(consensus)
+    };
+
+    // Override max_files if specified
+    let config = BountyConfig {
+        max_files,
+        output_format: match format {
+            "json" => BountyOutputFormat::Json,
+            "markdown" | "md" => BountyOutputFormat::Markdown,
+            _ => BountyOutputFormat::Text,
+        },
+        ..config
+    };
+
+    let mut coordinator =
+        BountyCoordinator::new(config).map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    let result = coordinator
+        .run()
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    match format {
+        "json" => {
+            println!("{}", smesh_bounty::results_to_json(&result));
+        }
+        _ => {
+            smesh_bounty::print_results(&result);
+        }
+    }
+
+    Ok(())
 }
 
 async fn cmd_swarm(path: &Path, max_files: usize, format: &str, consensus: u32) -> Result<()> {

@@ -12,6 +12,7 @@ path = "src/main.rs"
 smesh-core = { path = "../smesh-core" }
 smesh-runtime = { path = "../smesh-runtime" }
 smesh-agent = { path = "../smesh-agent" }
+smesh-bounty = { path = "../smesh-bounty" }
 tokio = { workspace = true }
 clap = { workspace = true }
 tracing = { workspace = true }
@@ -22,3 +23,6 @@ serde = { workspace = true }
 chrono = { workspace = true }
 sha2 = { workspace = true }
 regex = "1"
+walkdir = "2"
+notify = { version = "6", features = ["macos_kqueue"] }
+base64 = "0.22"

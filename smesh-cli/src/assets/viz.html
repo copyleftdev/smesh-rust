@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SMESH — Plant-Inspired AI Coordination</title>
+<style>
+:root{--bg:#06060c;--surface:#0d0d16;--card:#13131f;--border:#1e1e32;--text:#e4e4ed;--text2:#7a7a96;--dim:#4a4a64;--accent:#4d8fec;--glow:rgba(77,143,236,.15);--warm:#e8a030;--green:#34d399;--red:#f87171;--purple:#c792ea;--mono:'SF Mono','Cascadia Code','JetBrains Mono','Consolas',monospace;--sans:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;--ease:cubic-bezier(.16,1,.3,1)}
+*{margin:0;padding:0;box-sizing:border-box}
+html{font-size:16px;scroll-behavior:smooth;-webkit-font-smoothing:antialiased}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);line-height:1.7;overflow-x:hidden}
+
+/* ── landing ── */
+#landing{min-height:100vh}
+#viz-mode{display:none;position:fixed;top:0;left:0;right:0;bottom:0}
+
+.reveal{opacity:0;transform:translateY(30px);transition:opacity .7s var(--ease),transform .7s var(--ease)}
+.reveal.v{opacity:1;transform:translateY(0)}
+.d1{transition-delay:.15s}.d2{transition-delay:.3s}.d3{transition-delay:.5s}.d4{transition-delay:.7s}.d5{transition-delay:.9s}
+
+/* kinetic hero text */
+.hero-word{display:inline-block;opacity:0;transform:translateY(60px) scale(.95);filter:blur(8px);transition:all 1s var(--ease)}
+.hero-word.v{opacity:1;transform:translateY(0) scale(1);filter:blur(0)}
+.hero-word:nth-child(1){transition-delay:.1s}
+.hero-word:nth-child(2){transition-delay:.25s}
+.hero-word:nth-child(3){transition-delay:.4s}
+
+/* type shimmer */
+@keyframes shimmer{0%{background-position:-200% center}100%{background-position:200% center}}
+.shimmer{background:linear-gradient(90deg,var(--accent) 0%,#82aaff 25%,var(--accent) 50%,var(--purple) 75%,var(--accent) 100%);background-size:200% auto;-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;animation:shimmer 4s linear infinite}
+
+/* brand mark breathing */
+@keyframes brand-breathe{0%,100%{text-shadow:0 0 40px rgba(77,143,236,.15),0 0 80px rgba(77,143,236,.05)}50%{text-shadow:0 0 60px rgba(77,143,236,.25),0 0 120px rgba(77,143,236,.1)}}
+.brand{animation:brand-breathe 3s ease-in-out infinite}
+
+/* stagger mission cards */
+.mission:nth-child(1){transition-delay:.6s}
+.mission:nth-child(2){transition-delay:.72s}
+.mission:nth-child(3){transition-delay:.84s}
+.mission:nth-child(4){transition-delay:.96s}
+
+/* subtitle line reveal */
+@keyframes line-draw{from{width:0}to{width:60px}}
+.line-accent{display:block;height:1px;background:var(--accent);margin:1rem auto;animation:line-draw 1s var(--ease) .5s both}
+
+.container{max-width:1080px;margin:0 auto;padding:0 2rem}
+section{padding:6rem 0;position:relative}
+section+section{border-top:1px solid var(--border)}
+.label{font-size:.7rem;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);margin-bottom:.75rem;display:block}
+h1{font-size:clamp(2.5rem,7vw,5rem);font-weight:800;letter-spacing:-.04em;line-height:1.05}
+h2{font-size:clamp(1.4rem,3vw,2.2rem);font-weight:700;letter-spacing:-.03em;line-height:1.2;margin-bottom:.75rem}
+h3{font-size:1rem;font-weight:600;color:var(--text);margin-bottom:.4rem}
+p{color:var(--text2);max-width:600px}
+p+p{margin-top:.75rem}
+
+/* hero */
+.hero{min-height:100vh;display:flex;align-items:center;padding:4rem 0 2rem;background:radial-gradient(ellipse 60% 50% at 50% 0%,rgba(77,143,236,.06) 0%,transparent 100%),var(--bg)}
+@media(max-width:600px){.hero{padding:3rem .5rem 1rem}.container{padding:0 1rem}#v-hud{font-size:.6rem;top:2.5rem;left:.5rem}#v-metrics{top:2.5rem;right:.5rem;font-size:.6rem}#v-ticker{font-size:.5rem;left:.5rem;right:.5rem;bottom:.5rem}#v-prov{display:none}#v-keys{display:none}#v-tabs .tab{font-size:.5rem;padding:.25rem .5rem}}
+.hero h1 span{display:block}
+.tagline{font-size:clamp(1rem,1.8vw,1.25rem);color:var(--text2);margin-top:1.25rem;max-width:520px;line-height:1.6}
+.provenance-badge{font-family:var(--mono);font-size:.625rem;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);border:1px solid var(--border);display:inline-block;padding:3px 10px;border-radius:3px;margin-top:1.5rem;background:rgba(77,143,236,.03)}
+
+/* signal diagram */
+.signal-row{display:flex;align-items:center;gap:0;margin:2.5rem 0;overflow-x:auto;padding-bottom:.5rem}
+.sig-node{padding:.75rem 1rem;background:var(--card);border:1px solid var(--border);border-radius:10px;text-align:center;min-width:100px;flex-shrink:0;transition:all .3s var(--ease)}
+.sig-node:hover{border-color:var(--accent);background:var(--glow);transform:translateY(-2px)}
+.sig-node .sn{font-family:var(--mono);font-size:.75rem;font-weight:500}
+.sig-node .sd{font-size:.625rem;color:var(--dim);margin-top:2px}
+.sig-arrow{color:var(--dim);font-size:1.1rem;padding:0 .4rem;flex-shrink:0}
+
+/* concept grid */
+.concepts{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1px;background:var(--border);border:1px solid var(--border);border-radius:14px;overflow:hidden;margin-top:2rem}
+.concept{background:var(--card);padding:1.5rem}
+.concept .icon{font-size:1.5rem;margin-bottom:.5rem}
+.concept .cname{font-family:var(--mono);font-size:.8rem;font-weight:600;color:var(--accent)}
+.concept .cdesc{font-size:.8rem;color:var(--text2);margin-top:.3rem;line-height:1.5}
+
+/* mission cards (fallback) */
+.missions{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1.25rem;margin-top:2rem}
+.mission{padding:1.5rem;background:var(--card);border:1px solid var(--border);border-radius:12px;cursor:pointer;transition:all .4s var(--ease);position:relative;overflow:hidden}
+.mission:hover{transform:translateY(-4px) scale(1.02);box-shadow:0 12px 40px rgba(77,143,236,.15)}
+.mission .mtag{font-family:var(--mono);font-size:.55rem;letter-spacing:.12em;text-transform:uppercase;margin-bottom:.4rem}
+.mission h3{font-size:1.05rem;margin-bottom:.3rem}
+.mission .mdesc{font-size:.75rem;color:var(--text2);line-height:1.5}
+.mission .menter{font-family:var(--mono);font-size:.65rem;color:var(--dim);margin-top:.75rem;transition:color .3s,letter-spacing .3s}
+.mission:hover .menter{color:var(--accent);letter-spacing:.05em}
+/* top accent bar + animated glow */
+.mission::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;transition:height .3s,opacity .3s}
+.mission:hover::before{height:3px;opacity:1}
+.mission::after{content:'';position:absolute;top:0;left:0;right:0;height:60px;opacity:0;transition:opacity .4s;pointer-events:none}
+.mission:hover::after{opacity:1}
+/* per-card colors */
+.mission:nth-child(1)::before{background:var(--purple)}.mission:nth-child(1)::after{background:linear-gradient(180deg,rgba(199,146,234,.08),transparent)}.mission:nth-child(1) .mtag{color:var(--purple)}.mission:nth-child(1):hover{border-color:rgba(199,146,234,.3)}
+.mission:nth-child(2)::before{background:var(--warm)}.mission:nth-child(2)::after{background:linear-gradient(180deg,rgba(232,160,48,.08),transparent)}.mission:nth-child(2) .mtag{color:var(--warm)}.mission:nth-child(2):hover{border-color:rgba(232,160,48,.3)}
+.mission:nth-child(3)::before{background:var(--red)}.mission:nth-child(3)::after{background:linear-gradient(180deg,rgba(248,113,113,.08),transparent)}.mission:nth-child(3) .mtag{color:var(--red)}.mission:nth-child(3):hover{border-color:rgba(248,113,113,.3)}
+.mission:nth-child(4)::before{background:var(--green)}.mission:nth-child(4)::after{background:linear-gradient(180deg,rgba(52,211,153,.08),transparent)}.mission:nth-child(4) .mtag{color:var(--green)}.mission:nth-child(4):hover{border-color:rgba(52,211,153,.3)}
+/* pulse dot */
+.mission .pulse{width:6px;height:6px;border-radius:50%;display:inline-block;margin-right:6px;animation:pulse-dot 2s ease-in-out infinite;vertical-align:middle}
+@keyframes pulse-dot{0%,100%{opacity:.3;transform:scale(1)}50%{opacity:1;transform:scale(1.4)}}
+@keyframes cta-breathe{0%,100%{opacity:.5;letter-spacing:.06em}50%{opacity:1;letter-spacing:.1em}}
+.cta-pulse{animation:cta-breathe 3s ease-in-out infinite}
+.mission:nth-child(1) .pulse{background:var(--purple)}.mission:nth-child(2) .pulse{background:var(--warm)}.mission:nth-child(3) .pulse{background:var(--red)}.mission:nth-child(4) .pulse{background:var(--green)}
+
+/* nav */
+nav{position:fixed;top:0;left:0;right:0;z-index:100;padding:.75rem 2rem;background:rgba(6,6,12,.85);backdrop-filter:blur(20px);border-bottom:1px solid transparent;transition:border-color .3s}
+nav.scrolled{border-bottom-color:var(--border)}
+nav .inner{max-width:1080px;margin:0 auto;display:flex;justify-content:space-between;align-items:center}
+nav .logo{font-family:var(--mono);font-size:1rem;font-weight:600;color:var(--text);text-decoration:none}
+nav .nav-r{display:flex;gap:1.5rem;align-items:center;font-size:.8rem}
+nav .nav-r a{color:var(--dim);text-decoration:none;transition:color .2s}
+nav .nav-r a:hover{color:var(--text)}
+
+/* footer */
+.foot{text-align:center;padding:3rem 0;border-top:1px solid var(--border)}
+.foot p{font-size:.75rem;color:var(--dim);margin:0 auto}
+
+/* ── viz mode ── */
+#viz-mode canvas{display:block;position:fixed;top:0;left:0}
+#viz-ui{position:fixed;top:0;left:0;right:0;bottom:0;pointer-events:none;z-index:10}
+#v-back{position:fixed;top:.75rem;left:.75rem;z-index:20;pointer-events:all;font-family:var(--mono);font-size:.7rem;padding:.4rem .8rem;background:rgba(6,6,12,.85);border:1px solid var(--border);border-radius:6px;color:var(--dim);cursor:pointer;transition:all .2s}
+#v-back:hover{color:var(--text);border-color:var(--accent)}
+#v-tabs{position:fixed;top:.75rem;left:50%;transform:translateX(-50%);z-index:20;display:flex;gap:0;font-family:var(--mono);font-size:.65rem;pointer-events:all}
+.tab{padding:.35rem .9rem;background:rgba(6,6,12,.85);border:1px solid var(--border);cursor:pointer;color:var(--dim);transition:all .2s;user-select:none}
+.tab:first-child{border-radius:5px 0 0 5px}.tab:last-child{border-radius:0 5px 5px 0}
+.tab.active{color:var(--accent);border-color:var(--accent);background:rgba(77,143,236,.08)}
+#v-hud{position:absolute;top:2.75rem;left:1rem;font-family:var(--mono);font-size:.7rem}
+#v-hud .t{font-size:.8rem;font-weight:600;color:var(--accent);letter-spacing:2px;margin-bottom:2px}
+#v-hud .prov{font-size:.5rem;letter-spacing:.08em;text-transform:uppercase;color:#334;border:1px solid #1a1a2a;display:inline-block;padding:1px 6px;border-radius:3px;margin-bottom:6px;background:rgba(77,143,236,.04)}
+#v-hud .sub{font-size:.6rem;color:var(--dim)}
+#v-hud .phase{font-size:1rem;font-weight:700;margin-top:8px}
+#v-hud .det{font-size:.6rem;color:var(--text2);margin-top:2px}
+#v-metrics{position:absolute;top:2.75rem;right:1rem;display:flex;flex-direction:column;gap:.35rem;font-family:var(--mono);font-size:.65rem}
+.mc{background:rgba(6,6,12,.85);border:1px solid var(--border);border-radius:6px;padding:.35rem .6rem}
+.mc .l{color:var(--dim);font-size:.55rem}.mc .val{font-size:.9rem;font-weight:600;margin-top:1px}
+#v-ticker{position:absolute;bottom:.75rem;left:.75rem;right:.75rem;display:flex;gap:.35rem;overflow:hidden;font-family:var(--mono);font-size:.575rem}
+.ti{background:rgba(6,6,12,.85);border-radius:4px;padding:.15rem .4rem;white-space:nowrap;flex-shrink:0;transition:opacity .6s}
+#v-prov{position:absolute;bottom:3rem;left:1rem;font-family:var(--mono);font-size:.45rem;color:#1a1a28;line-height:1.7;max-width:400px}
+#v-keys{position:absolute;bottom:3rem;right:1rem;font-family:var(--mono);font-size:.5rem;color:#222;text-align:right}
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════ -->
+<!-- LANDING PAGE                              -->
+<!-- ══════════════════════════════════════════ -->
+<div id="landing">
+
+<section class="hero" style="flex-direction:column;justify-content:center;text-align:center;min-height:100vh">
+  <div class="container" style="display:flex;flex-direction:column;align-items:center">
+
+    <!-- brand mark -->
+    <div style="font-family:var(--mono);font-size:clamp(4rem,12vw,9rem);font-weight:800;letter-spacing:-.07em;line-height:.9;margin-bottom:.5rem" class="brand shimmer hero-word">smesh<span style="font-size:.35em;vertical-align:super;letter-spacing:0;margin-left:.15em;opacity:.7">AI</span></div>
+
+    <!-- kinetic tagline — each phrase arrives separately -->
+    <div style="font-size:clamp(.85rem,1.4vw,1.05rem);color:var(--text2);margin-top:.75rem;line-height:1.8">
+      <span class="hero-word" style="color:var(--text)">Signals decay.</span>
+      <span class="hero-word" style="color:var(--text)">Findings reinforce.</span>
+      <span class="hero-word" style="color:var(--accent)">Consensus emerges.</span>
+    </div>
+
+    <span class="line-accent"></span>
+
+    <div class="reveal d2" style="margin-bottom:3rem">
+      <span style="font-family:var(--mono);font-size:.55rem;letter-spacing:.1em;text-transform:uppercase;color:#2a2a3a">execution replay · profiled at the kernel level</span>
+    </div>
+
+    <div class="reveal d2 cta-pulse" style="font-family:var(--mono);font-size:.7rem;color:var(--accent);letter-spacing:.06em;margin-bottom:.75rem">select a node to enter the signal field</div>
+
+    <!-- interactive signal field selector -->
+    <canvas id="selector" class="reveal d3" style="width:calc(100% - 1rem);max-width:720px;height:min(320px,55vw);border-radius:12px;cursor:pointer;border:1px solid var(--border);background:#08080f;touch-action:none"></canvas>
+  </div>
+</section>
+</div>
+
+<!-- ══════════════════════════════════════════ -->
+<!-- VIZ MODE                                  -->
+<!-- ══════════════════════════════════════════ -->
+<div id="viz-mode">
+  <button id="v-back" onclick="exitViz()">← back</button>
+  <div id="v-tabs">
+    <div class="tab active" data-tab="0">WEB RED TEAM</div>
+    <div class="tab" data-tab="1">STATIC ANALYSIS</div>
+    <div class="tab" data-tab="2">THREAT HUNT</div>
+    <div class="tab" data-tab="3">OSI · PCAP</div>
+    <div class="tab" data-tab="4">FUZZ SWARM</div>
+    <div class="tab" data-tab="5">DARK POOL</div>
+  </div>
+  <div id="viz-ui">
+    <div id="v-hud">
+      <div class="t">SMESH SIGNAL FIELD</div>
+      <div class="prov">EXECUTION REPLAY · strace(1) · /proc · profiled syscall capture</div>
+      <div class="sub" id="h-sub"></div>
+      <div class="phase" id="p-name">INITIALIZING</div>
+      <div class="det" id="p-det"></div>
+    </div>
+    <div id="v-metrics">
+      <div class="mc"><div class="l">signals</div><div class="val" id="m-sig" style="color:var(--warm)">0</div></div>
+      <div class="mc"><div class="l">kernel syscalls</div><div class="val" id="m-sys" style="color:var(--accent)">0</div></div>
+      <div class="mc"><div class="l">findings</div><div class="val" id="m-fnd" style="color:var(--red)">0</div></div>
+      <div class="mc"><div class="l">consensus</div><div class="val" id="m-con" style="color:var(--green)">0</div></div>
+    </div>
+    <div id="v-ticker"></div>
+    <div id="v-prov">Not a simulation. Derived from strace -f -c kernel capture.<br>Syscall counts are real. Decay: I(t) = I₀·e⁻ᵏᵗ</div>
+    <div id="v-keys">SPACE pause · +/- speed · R restart · ESC exit · 1-6 missions</div>
+  </div>
+  <canvas id="c"></canvas>
+</div>
+
+<!-- ══════════════════════════════════════════ -->
+<!-- SCRIPTS                                   -->
+<!-- ══════════════════════════════════════════ -->
+<script>
+// ── Landing page reveals ──
+// ── selector field (mini interactive viz) ──
+(function(){
+  const cv=document.getElementById('selector');
+  if(!cv)return;
+  const cx=cv.getContext('2d'), dp=devicePixelRatio||1;
+  let sw,sh,mx=-1,my=-1;
+
+  function szs(){
+    const r=cv.getBoundingClientRect();
+    sw=r.width;sh=r.height;cv.width=sw*dp;cv.height=sh*dp;cx.setTransform(dp,0,0,dp,0,0);
+    layMissions();
+  }
+
+  const MNODES=[
+    {label:'Web Red Team',sub:'12 agents · 3.9M events',col:'#c792ea',idx:0,glow:.3,halo:0},
+    {label:'Static Analysis',sub:'Fast meets slow',col:'#e8a030',idx:1,glow:.3,halo:0},
+    {label:'Threat Hunt',sub:'8 hunters · kill chain',col:'#f87171',idx:2,glow:.3,halo:0},
+    {label:'OSI · PCAP',sub:'Physics finds the beacon',col:'#34d399',idx:3,glow:.3,halo:0},
+    {label:'Fuzz Swarm',sub:'2.1M syscalls · 30s',col:'#ff6633',idx:4,glow:.3,halo:0},
+    {label:'Dark Pool',sub:'10K trades · Polygon.io',col:'#e8a030',idx:5,glow:.3,halo:0},
+  ];
+  const medges=[],mparticles=[],mstars=[];
+  let hover=-1;
+
+  function layMissions(){
+    if(!sw)return;
+    const cxx=sw/2,cyy=sh/2;
+    const compact=sw<500;
+    const rx=sw*(compact?.32:.3),ry=sh*(compact?.3:.28);
+    const nr=compact?18:22;
+    MNODES.forEach((n,i)=>{
+      const a=-Math.PI/2+i/MNODES.length*Math.PI*2;
+      n.x=cxx+Math.cos(a)*rx;
+      n.y=cyy+Math.sin(a)*ry;
+      n.r=nr;
+    });
+    medges.length=0;
+    for(let i=0;i<MNODES.length;i++)for(let j=i+1;j<MNODES.length;j++)medges.push({a:i,b:j,glow:0});
+    mstars.length=0;
+    for(let i=0;i<80;i++)mstars.push({x:Math.random()*sw,y:Math.random()*sh,r:Math.random()*.8+.2,a:.1+Math.random()*.2,tw:Math.random()*6});
+  }
+
+  szs();
+  window.addEventListener('resize',szs);
+
+  cv.addEventListener('mousemove',e=>{
+    const r=cv.getBoundingClientRect();
+    mx=e.clientX-r.left;my=e.clientY-r.top;
+    hover=-1;
+    MNODES.forEach((n,i)=>{
+      const d=Math.sqrt((mx-n.x)**2+(my-n.y)**2);
+      if(d<n.r+15)hover=i;
+    });
+    cv.style.cursor=hover>=0?'pointer':'default';
+  });
+  cv.addEventListener('mouseleave',()=>{mx=-1;my=-1;hover=-1;cv.style.cursor='default'});
+  cv.addEventListener('click',()=>{if(hover>=0)enterViz(hover)});
+  // touch support
+  cv.addEventListener('touchstart',e=>{
+    e.preventDefault();
+    const t=e.touches[0],r=cv.getBoundingClientRect();
+    mx=t.clientX-r.left;my=t.clientY-r.top;
+    hover=-1;
+    MNODES.forEach((n,i)=>{if(Math.sqrt((mx-n.x)**2+(my-n.y)**2)<n.r+20)hover=i});
+    if(hover>=0)enterViz(hover);
+  },{passive:false});
+
+  function emitMP(fx,fy,tx,ty,col){
+    const mmx=(fx+tx)/2+(Math.random()-.5)*30;
+    const mmy=(fy+ty)/2+(Math.random()-.5)*20;
+    mparticles.push({x:fx,y:fy,ox:fx,oy:fy,tx,ty,mx:mmx,my:mmy,t:0,spd:.008+Math.random()*.01,col,sz:1.5+Math.random()});
+  }
+
+  function bz(ax,ay,mmx,mmy,bx,by,t){const u=1-t;return{x:u*u*ax+2*u*t*mmx+t*t*bx,y:u*u*ay+2*u*t*mmy+t*t*by}}
+
+  let frame=0;
+  function draw(){
+    requestAnimationFrame(draw);
+    frame++;
+    cx.clearRect(0,0,sw,sh);
+
+    // stars
+    for(const s of mstars){
+      s.tw+=.015;
+      cx.beginPath();cx.arc(s.x,s.y,s.r,0,Math.PI*2);
+      cx.fillStyle=`rgba(140,160,200,${s.a*(.6+Math.sin(s.tw)*.4)})`;cx.fill();
+    }
+
+    // edges
+    for(const e of medges){
+      const a=MNODES[e.a],b=MNODES[e.b];
+      cx.beginPath();cx.moveTo(a.x,a.y);
+      const mmy=(a.y+b.y)/2;
+      cx.bezierCurveTo(a.x,mmy,b.x,mmy,b.x,b.y);
+      const eg=Math.max(e.glow,(hover===e.a||hover===e.b)?.3:0);
+      cx.strokeStyle=`rgba(77,143,236,${.06+eg*.25})`;
+      cx.lineWidth=eg>.1?1.2:.5;
+      if(eg>.1){cx.shadowColor='#4d8fec';cx.shadowBlur=4*eg}
+      cx.stroke();cx.shadowBlur=0;
+      e.glow*=.95;
+    }
+
+    // ambient particles between nodes
+    if(frame%12===0){
+      const ei=Math.floor(Math.random()*medges.length);
+      const e=medges[ei];
+      const a=MNODES[e.a],b=MNODES[e.b];
+      emitMP(a.x,a.y,b.x,b.y,'#4d8fec');
+      e.glow=.5;
+    }
+
+    // particles
+    for(let i=mparticles.length-1;i>=0;i--){
+      const p=mparticles[i];
+      p.t+=p.spd;if(p.t>=1){mparticles.splice(i,1);continue}
+      const pt=bz(p.ox,p.oy,p.mx,p.my,p.tx,p.ty,p.t);
+      const px=p.x,py=p.y;p.x=pt.x;p.y=pt.y;
+      const al=p.t<.7?1:(1-p.t)*3.3;
+      const dx=p.x-px,dy=p.y-py;
+      if(Math.sqrt(dx*dx+dy*dy)>1){
+        cx.beginPath();cx.moveTo(p.x-dx*1.5,p.y-dy*1.5);cx.lineTo(p.x,p.y);
+        cx.strokeStyle=p.col;cx.lineWidth=p.sz*.6;cx.globalAlpha=al*.3;
+        cx.shadowColor=p.col;cx.shadowBlur=6;cx.stroke();cx.shadowBlur=0;
+      }
+      cx.beginPath();cx.arc(p.x,p.y,p.sz,0,Math.PI*2);
+      cx.fillStyle=p.col;cx.shadowColor=p.col;cx.shadowBlur=10;cx.globalAlpha=al;
+      cx.fill();cx.globalAlpha=1;cx.shadowBlur=0;
+    }
+
+    // nodes
+    MNODES.forEach((n,i)=>{
+      const isHover=hover===i;
+      const dist=mx>=0?Math.sqrt((mx-n.x)**2+(my-n.y)**2):999;
+      const prox=Math.max(0,1-dist/120); // proximity glow
+
+      const targetGlow=isHover?1:.3+prox*.3+Math.sin(frame*.03+i*1.5)*.08;
+      n.glow+=(targetGlow-n.glow)*.08;
+      n.halo+=(isHover?.8:prox*.3-n.halo)*.06;
+
+      // halo
+      if(n.halo>.02){
+        const hr=n.r*3+n.halo*20;
+        const hg=cx.createRadialGradient(n.x,n.y,0,n.x,n.y,hr);
+        hg.addColorStop(0,n.col+'30');hg.addColorStop(1,'transparent');
+        cx.fillStyle=hg;cx.fillRect(n.x-hr,n.y-hr,hr*2,hr*2);
+      }
+
+      // node circle
+      cx.beginPath();cx.arc(n.x,n.y,n.r*(isHover?1.12:1),0,Math.PI*2);
+      cx.fillStyle=n.col;cx.shadowColor=n.col;cx.shadowBlur=20*n.glow;
+      cx.globalAlpha=.15+n.glow*.75;cx.fill();cx.globalAlpha=1;cx.shadowBlur=0;
+
+      // ring
+      if(n.glow>.35){
+        cx.beginPath();cx.arc(n.x,n.y,n.r+(1-n.glow)*18,0,Math.PI*2);
+        cx.strokeStyle=n.col+'44';cx.lineWidth=.8;cx.stroke();
+      }
+
+      // number
+      const compact=sw<500;
+      const fs1=compact?(isHover?11:10):(isHover?14:12);
+      const fs2=compact?(isHover?8:7):(isHover?11:9);
+      cx.fillStyle=`rgba(228,228,237,${.4+n.glow*.5})`;
+      cx.font='700 '+fs1+'px var(--mono)';cx.textAlign='center';
+      cx.fillText('0'+(i+1),n.x,n.y+4);
+
+      // label below
+      const labelAlpha=.25+n.glow*.6+(isHover?.3:0);
+      cx.fillStyle=`rgba(228,228,237,${labelAlpha})`;
+      cx.font=(isHover?'600':'500')+' '+fs2+'px var(--mono)';
+      cx.fillText(n.label,n.x,n.y+n.r+(compact?12:16));
+
+      // subtitle on hover (desktop only)
+      if(isHover&&!compact){
+        cx.fillStyle=`rgba(122,122,150,.7)`;
+        cx.font='400 8px var(--sans)';
+        cx.fillText(n.sub,n.x,n.y+n.r+30);
+      }
+
+      // burst on hover enter
+      if(isHover&&n.halo<.2){
+        for(let j=0;j<5;j++){
+          const a=Math.random()*Math.PI*2,d=30+Math.random()*25;
+          emitMP(n.x,n.y,n.x+Math.cos(a)*d,n.y+Math.sin(a)*d,n.col);
+        }
+      }
+    });
+
+    // scan lines
+    cx.fillStyle='rgba(0,0,0,.025)';
+    for(let y=0;y<sh;y+=3)cx.fillRect(0,y,sw,1);
+  }
+
+  // trigger layout after reveal animation
+  const robs=new IntersectionObserver(e=>{if(e[0].isIntersecting){szs();robs.disconnect()}},{threshold:.1});
+  robs.observe(cv);
+
+  draw();
+})();
+
+// reveal observer
+const obs=new IntersectionObserver(e=>e.forEach(x=>{if(x.isIntersecting)x.target.classList.add('v')}),{threshold:.1,rootMargin:'0px 0px -30px 0px'});
+document.querySelectorAll('.reveal').forEach(el=>obs.observe(el));
+
+// hero words — staggered entrance on load
+setTimeout(()=>{document.querySelectorAll('.hero-word').forEach(w=>w.classList.add('v'))},200);
+
+// ── Viz engine ──
+function enterViz(tab){
+  document.getElementById('landing').style.display='none';
+  document.getElementById('viz-mode').style.display='block';
+  document.body.style.overflow='hidden';
+  if(!vizStarted){initViz();vizStarted=true}
+  switchTab(tab);
+}
+function exitViz(){
+  document.getElementById('viz-mode').style.display='none';
+  document.getElementById('landing').style.display='block';
+  document.body.style.overflow='';
+}
+let vizStarted=false;
+
+function initViz(){
+const C=document.getElementById('c'),X=C.getContext('2d'),D=devicePixelRatio||1;
+let W,H;
+const nodes={},edges=[],outerN=[],particles=[],shockwaves=[],pulseWaves=[],starField=[];
+let activeTab=0,T=0,speed=10,play=true,finds=0,cons=0,auraAlpha=0;
+const firedF=new Set,firedR=new Set,actPh=new Set;
+let sigSec=0,dSps=0,lastSec=performance.now();
+const tickEl=document.getElementById('v-ticker'),ticks=[];
+
+function resetState(){T=0;finds=0;cons=0;auraAlpha=0;firedF.clear();firedR.clear();actPh.clear();particles.length=0;shockwaves.length=0;pulseWaves.length=0;ticks.forEach(t=>t.remove());ticks.length=0;Object.values(nodes).forEach(n=>{n.glow=n.ti===0?.35:0;n.halo=0});outerN.forEach(s=>{s.disc=false;s.glow=0})}
+
+const COL={dim:'rgba(30,30,50,.45)',dimE:'rgba(20,20,40,.12)',orch:'#4d8fec',t1:'#c792ea',t2:'#e8a030',t3:'#34d399',sub:'#0f2a44',subLit:'#4d8fec',edgeG:'#4d8fec',sev:{CRITICAL:'#ff2222',HIGH:'#ff6633',MEDIUM:'#e8a030',LOW:'#4d8fec',INFO:'#2a4466',WARNING:'#e8a030'},reinforce:'#34d399'};
+
+// ── MISSION DATA (same as before, condensed) ──
+const M_DATA=[
+{name:'WEB RED TEAM',sub:'3.9M syscalls · 595K kernel events · strace -f -c profiled',tt:580,
+phases:[{id:'SUB',ti:1,t0:0,t1:30,l:'SUBFINDER',d:'passive enum',sc:2100},{id:'DNS',ti:1,t0:30,t1:55,l:'DNSX',d:'resolve 539→43',sc:4200},{id:'NAA',ti:1,t0:55,t1:175,l:'NAABU',d:'131K connect()',sc:215e3},{id:'HTX',ti:1,t0:175,t1:210,l:'HTTPX',d:'tech detect',sc:12e3},{id:'KAT',ti:1,t0:210,t1:280,l:'KATANA',d:'596 URLs',sc:18e3},{id:'NUC',ti:1,t0:280,t1:340,l:'NUCLEI',d:'vuln templates',sc:35e3},{id:'WP',ti:2,t0:340,t1:400,l:'WP DEEP',d:'xmlrpc · enum',sc:4500},{id:'API',ti:2,t0:400,t1:450,l:'API ANALYST',d:'openid · swagger',sc:8e3},{id:'CLD',ti:2,t0:450,t1:480,l:'CLOUD RECON',d:'GCP · buckets',sc:3200},{id:'STG',ti:2,t0:480,t1:510,l:'STAGING RAID',d:'qa/sandbox',sc:5e3},{id:'AUT',ti:2,t0:510,t1:550,l:'AUTH HEADERS',d:'CORS · CSP',sc:6e3},{id:'CON',ti:3,t0:550,t1:575,l:'CONSENSUS',d:'signal reinforce',sc:200}],
+outer:Array.from({length:30},(_,i)=>'n-'+String.fromCharCode(945+Math.floor(i/3))+((i%3)+1).toString().padStart(2,'0')),ol:'TARGET NODES',
+findings:[{t:300,f:'NUC',s:'MEDIUM',m:'template match'},{t:320,f:'NUC',s:'HIGH',m:'CVE pattern'},{t:350,f:'WP',s:'MEDIUM',m:'RPC amplification'},{t:358,f:'WP',s:'HIGH',m:'brute force path'},{t:365,f:'WP',s:'LOW',m:'cron endpoint'},{t:370,f:'WP',s:'LOW',m:'user enum'},{t:410,f:'API',s:'HIGH',m:'auth config exposed'},{t:420,f:'API',s:'HIGH',m:'staging redirect'},{t:435,f:'API',s:'MEDIUM',m:'undoc endpoint'},{t:455,f:'CLD',s:'INFO',m:'bucket 403'},{t:460,f:'CLD',s:'HIGH',m:'direct IP no WAF'},{t:490,f:'STG',s:'HIGH',m:'non-prod live'},{t:495,f:'STG',s:'CRITICAL',m:'ops panel exposed'},...Array.from({length:20},(_,i)=>({t:515+i*1.5,f:'AUT',s:['MEDIUM','LOW','MEDIUM','LOW','MEDIUM'][i%5],m:['no CSP','no HSTS','no policy','CORS misc','ver leak'][i%5]}))],
+reinforcements:[{t:372,a:'WP',b:'NUC'},{t:425,a:'API',b:'STG'},{t:498,a:'STG',b:'API'},{t:535,a:'AUT',b:'WP'},{t:540,a:'AUT',b:'API'},...Array.from({length:8},(_,i)=>({t:555+i*2,a:'CON',b:['WP','API','STG','AUT','NUC','CLD','WP','API'][i]}))],
+storm:{id:'NAA',t0:55,t1:175,rate:.5,col:'#f8717188'}},
+
+{name:'STATIC ANALYSIS',sub:'2.66M syscalls · zentinel 5,949 vs semgrep 2,651,643 · strace profiled',tt:180,
+phases:[{id:'ZNT',ti:1,t0:0,t1:12,l:'ZENTINEL',d:'0.22s · Zig native',sc:5949},{id:'GLK',ti:1,t0:0,t1:14,l:'GITLEAKS',d:'0.25s · Go',sc:4426},{id:'GRP',ti:1,t0:0,t1:3,l:'GREP',d:'0.006s · Unix',sc:50},{id:'SGR',ti:1,t0:0,t1:140,l:'SEMGREP',d:'32s · 2.6M syscalls',sc:2651643},{id:'COR',ti:2,t0:12,t1:145,l:'CORRELATOR',d:'cross-tool reinforce',sc:100},{id:'CON',ti:3,t0:145,t1:170,l:'CONSENSUS',d:'56 findings confirmed',sc:50}],
+outer:['application.js','request.js','response.js','router/index.js','router/route.js','router/layer.js','utils.js','view.js','auth/index.js','session/index.js','session/redis.js','mvc/index.js','cookies/index.js','cookie-sessions/index.js','error/index.js','params/index.js','resource/index.js','app.listen.js','app.options.js','app.param.js','app.render.js','app.request.js','app.response.js','app.route.js','app.router.js','app.use.js','req.hostname.js','req.ip.js','res.cookie.js','res.redirect.js'],ol:'SOURCE FILES',
+findings:[{t:3,f:'GRP',s:'HIGH',m:'hardcoded secret'},{t:4,f:'GRP',s:'HIGH',m:'hardcoded secret'},{t:5,f:'GRP',s:'HIGH',m:'hardcoded secret'},{t:6,f:'GRP',s:'HIGH',m:'hardcoded secret'},{t:7,f:'GRP',s:'MEDIUM',m:'hardcoded secret'},{t:8,f:'ZNT',s:'MEDIUM',m:'eval() pattern'},{t:9,f:'ZNT',s:'MEDIUM',m:'injection sink'},{t:10,f:'ZNT',s:'LOW',m:'weak random'},{t:140,f:'SGR',s:'MEDIUM',m:'cookie-session default'},{t:141,f:'SGR',s:'MEDIUM',m:'no domain set'},{t:141.5,f:'SGR',s:'MEDIUM',m:'no expires'},{t:142,f:'SGR',s:'MEDIUM',m:'no httponly'},{t:142.5,f:'SGR',s:'MEDIUM',m:'no path'},{t:143,f:'SGR',s:'MEDIUM',m:'no secure'},{t:143.5,f:'SGR',s:'MEDIUM',m:'hardcoded secret'},{t:144,f:'SGR',s:'MEDIUM',m:'tainted redirect'},...Array.from({length:12},(_,i)=>({t:144.5+i*.4,f:'SGR',s:'MEDIUM',m:['open redirect','no csrf','info leak','path traversal','cookie misc','session fix','header inject','unsafe regex','prototype pollute','ssrf','cors misc','xss sink'][i]}))],
+reinforcements:[{t:11,a:'ZNT',b:'GRP'},{t:20,a:'COR',b:'GRP'},{t:40,a:'COR',b:'ZNT'},{t:80,a:'COR',b:'ZNT'},{t:145,a:'SGR',b:'ZNT'},{t:146,a:'SGR',b:'GRP'},{t:147,a:'SGR',b:'ZNT'},{t:148,a:'SGR',b:'GRP'},...Array.from({length:10},(_,i)=>({t:150+i*2,a:'CON',b:['ZNT','SGR','GRP','GLK','ZNT','SGR','GRP','ZNT','SGR','GRP'][i]}))],
+storm:{id:'SGR',t0:0,t1:140,rate:.6,col:'#c792ea44'}},
+
+{name:'THREAT HUNT',sub:'tailx 12ms triage · 24 events → 19 groups · Drain + EWMA + CUSUM profiled',tt:240,
+phases:[{id:'TLX',ti:1,t0:0,t1:8,l:'TAILX INGEST',d:'12ms · Drain algo',sc:200},{id:'TRI',ti:1,t0:8,t1:20,l:'TAILX TRIAGE',d:'anomaly detect',sc:150},{id:'LAT',ti:1,t0:20,t1:80,l:'LATERAL MVMT',d:'T1021 · T1078',sc:1200},{id:'EXF',ti:1,t0:20,t1:90,l:'EXFILTRATION',d:'T1567 · T1048',sc:1400},{id:'PER',ti:1,t0:25,t1:75,l:'PERSISTENCE',d:'T1053 · T1543',sc:900},{id:'C2H',ti:1,t0:25,t1:85,l:'C2 BEACON',d:'T1071 · DGA',sc:1100},{id:'PRV',ti:2,t0:80,t1:130,l:'PRIV ESCALATION',d:'T1078.004 · T1098',sc:800},{id:'LOL',ti:2,t0:85,t1:135,l:'LIVING OFF LAND',d:'T1059 · curl|bash',sc:700},{id:'ATK',ti:2,t0:130,t1:180,l:'ATTACK CHAIN',d:'kill chain recon',sc:300},{id:'CON',ti:3,t0:180,t1:230,l:'HUNT CONSENSUS',d:'signal reinforce',sc:100}],
+outer:['compute-audit','iam-admin','storage-access','auth-login','dns-query','network-flow','logging-config','metadata-api','firewall-rules','ssh-sessions','api-keys','sa-tokens','bucket-policy','startup-scripts','instance-create','role-binding','egress-monitor','tor-detection','geo-anomaly','mfa-events','cron-scheduler','systemd-journal','process-exec','file-integrity','alert-routing','siem-connector','waf-logs','vpc-flow','cloud-nat','load-balancer'],ol:'LOG SOURCES',
+findings:[{t:5,f:'TLX',s:'HIGH',m:'3x failed → success'},{t:6,f:'TLX',s:'HIGH',m:'MFA bypass'},{t:7,f:'TLX',s:'MEDIUM',m:'firewall 0.0.0.0/0'},{t:8,f:'TRI',s:'HIGH',m:'847 TXT queries'},{t:9,f:'TRI',s:'CRITICAL',m:'Tor exit on storage'},{t:10,f:'TRI',s:'MEDIUM',m:'log sink deleted'},{t:30,f:'LAT',s:'HIGH',m:'SSH pivot chain'},{t:40,f:'LAT',s:'MEDIUM',m:'SA credential reuse'},{t:50,f:'LAT',s:'HIGH',m:'metadata token theft'},{t:35,f:'EXF',s:'CRITICAL',m:'4.2GB to public bucket'},{t:45,f:'EXF',s:'HIGH',m:'db-snapshot copied'},{t:55,f:'EXF',s:'CRITICAL',m:'12GB egress spike'},{t:65,f:'EXF',s:'HIGH',m:'DNS tunnel to c2-relay'},{t:32,f:'PER',s:'HIGH',m:'curl|bash startup'},{t:42,f:'PER',s:'MEDIUM',m:'new SA key'},{t:52,f:'PER',s:'HIGH',m:'2x sinks deleted'},{t:38,f:'C2H',s:'HIGH',m:'DNS beacon detected'},{t:48,f:'C2H',s:'MEDIUM',m:'60s ± jitter interval'},{t:58,f:'C2H',s:'HIGH',m:'known Tor exit IP'},{t:85,f:'PRV',s:'CRITICAL',m:'roles/owner from Tor'},{t:95,f:'PRV',s:'HIGH',m:'TokenCreator chain'},{t:105,f:'PRV',s:'HIGH',m:'allUsers on bucket'},{t:90,f:'LOL',s:'HIGH',m:'curl|bash in startup'},{t:100,f:'LOL',s:'MEDIUM',m:'metadata SA extract'},{t:110,f:'LOL',s:'HIGH',m:'gcloud API abuse'},{t:135,f:'ATK',s:'CRITICAL',m:'KILL CHAIN confirmed'},{t:145,f:'ATK',s:'CRITICAL',m:'8 min to 16GB exfil'},{t:155,f:'ATK',s:'HIGH',m:'Tor-based actor'},{t:165,f:'ATK',s:'HIGH',m:'db + 4.2GB exfilled'},...Array.from({length:8},(_,i)=>({t:185+i*3,f:'CON',s:'CRITICAL',m:['chain confirmed','timeline locked','IOCs extracted','MITRE mapped','SA revoked','bucket locked','FW restored','sinks restored'][i]}))],
+reinforcements:[{t:36,a:'EXF',b:'TLX'},{t:41,a:'LAT',b:'TLX'},{t:46,a:'C2H',b:'TRI'},{t:51,a:'PER',b:'LAT'},{t:56,a:'EXF',b:'C2H'},{t:88,a:'PRV',b:'LAT'},{t:93,a:'PRV',b:'EXF'},{t:98,a:'LOL',b:'PER'},{t:103,a:'LOL',b:'C2H'},{t:108,a:'PRV',b:'TLX'},{t:140,a:'ATK',b:'LAT'},{t:142,a:'ATK',b:'EXF'},{t:144,a:'ATK',b:'PRV'},{t:146,a:'ATK',b:'C2H'},{t:148,a:'ATK',b:'PER'},{t:150,a:'ATK',b:'LOL'},...Array.from({length:12},(_,i)=>({t:185+i*3,a:'CON',b:['TLX','LAT','EXF','PER','C2H','PRV','LOL','ATK','TLX','LAT','EXF','PRV'][i]}))],
+storm:{id:'TLX',t0:0,t1:8,rate:.8,col:'#4d8fec44'}},
+
+{name:'OSI · PCAP',sub:'floq Floquet spectral · 35K syscalls · 56MB pcap in 1.4s · Zig native',tt:200,
+phases:[{id:'FLQ',ti:1,t0:0,t1:25,l:'FLOQ SPECTRAL',d:'LSR + ACF + Jitter',sc:35718},{id:'TCP',ti:1,t0:0,t1:30,l:'TCP LAYER',d:'SYN/ACK/RST',sc:14e3},{id:'DNS2',ti:1,t0:5,t1:35,l:'DNS LAYER',d:'TXT tunnel · DGA',sc:8e3},{id:'TLS2',ti:1,t0:5,t1:30,l:'TLS LAYER',d:'JA3/JA4 · certs',sc:6e3},{id:'HTP',ti:1,t0:10,t1:40,l:'HTTP LAYER',d:'UA · URI · beacon',sc:10e3},{id:'BCN',ti:2,t0:40,t1:100,l:'BEACON DETECT',d:'581 flows scored',sc:2e3},{id:'C2P',ti:2,t0:45,t1:110,l:'C2 PROFILER',d:'interval · infra',sc:1500},{id:'FLW',ti:2,t0:50,t1:115,l:'FLOW CORRELATE',d:'cross-layer reinforce',sc:800},{id:'CON',ti:3,t0:120,t1:180,l:'VERDICT',d:'Floquet consensus',sc:100}],
+outer:['flow:2077','flow:2079','flow:2073','flow:4942','flow:1367','flow:443','flow:80','flow:53','flow:22','flow:8080','flow:993','flow:587','flow:1492','flow:2018','flow:1834','flow:3389','flow:445','flow:139','flow:135','flow:8443','flow:9090','flow:6667','flow:6697','flow:4444','flow:5555','flow:1337','flow:31337','flow:12345','flow:54321','flow:65535'],ol:'NETWORK FLOWS',
+findings:[{t:5,f:'FLQ',s:'HIGH',m:'beacon 0.792 :2077'},{t:6,f:'FLQ',s:'HIGH',m:'beacon 0.753 :2079'},{t:7,f:'FLQ',s:'HIGH',m:'beacon 0.741 :2073'},{t:8,f:'FLQ',s:'MEDIUM',m:'beacon 0.736 :4942'},{t:9,f:'FLQ',s:'MEDIUM',m:'beacon 0.731 :1367'},{t:12,f:'TCP',s:'MEDIUM',m:'SYN flood :445'},{t:15,f:'TCP',s:'LOW',m:'847 RSTs in 60s'},{t:18,f:'TCP',s:'MEDIUM',m:'12% retransmit'},{t:14,f:'DNS2',s:'HIGH',m:'TXT tunnel 200+ queries'},{t:20,f:'DNS2',s:'MEDIUM',m:'DGA high entropy'},{t:25,f:'DNS2',s:'HIGH',m:'fast-flux 42 IPs'},{t:16,f:'TLS2',s:'MEDIUM',m:'JA3 Cobalt Strike'},{t:22,f:'TLS2',s:'LOW',m:'self-signed :2077'},{t:28,f:'TLS2',s:'MEDIUM',m:'cert reuse 3 flows'},{t:20,f:'HTP',s:'MEDIUM',m:'GET every ~180s'},{t:30,f:'HTP',s:'LOW',m:'UA: Mozilla/4.0 kelihos'},{t:45,f:'BCN',s:'CRITICAL',m:'C2 CONFIRMED :2077'},{t:50,f:'BCN',s:'HIGH',m:'C2 CANDIDATE :2079'},{t:55,f:'BCN',s:'HIGH',m:'12 above threshold'},{t:60,f:'BCN',s:'MEDIUM',m:'period 60s-300s'},{t:52,f:'C2P',s:'HIGH',m:'180s ± 27s jitter'},{t:58,f:'C2P',s:'HIGH',m:'TCP binary :2077'},{t:65,f:'C2P',s:'MEDIUM',m:'bad ASN 193.232'},{t:72,f:'C2P',s:'HIGH',m:'Kelihos signature'},{t:62,f:'FLW',s:'HIGH',m:'DNS+TCP+beacon same src'},{t:75,f:'FLW',s:'CRITICAL',m:'kill chain DNS→TCP→HTTP→C2'},{t:85,f:'FLW',s:'HIGH',m:'lateral: 6 internal IPs'},{t:125,f:'CON',s:'CRITICAL',m:'Kelihos C2 confirmed'},{t:135,f:'CON',s:'CRITICAL',m:'LSR=0.594 GOE regime'},{t:145,f:'CON',s:'HIGH',m:'ACF 180s Floquet locked'},{t:155,f:'CON',s:'HIGH',m:'12 beacons 3 C2 servers'},{t:165,f:'CON',s:'CRITICAL',m:'T1071+T1573+T1008'}],
+reinforcements:[{t:17,a:'TCP',b:'FLQ'},{t:23,a:'DNS2',b:'FLQ'},{t:27,a:'TLS2',b:'FLQ'},{t:32,a:'HTP',b:'TCP'},{t:35,a:'DNS2',b:'TLS2'},{t:48,a:'BCN',b:'FLQ'},{t:53,a:'BCN',b:'TCP'},{t:58,a:'C2P',b:'BCN'},{t:63,a:'C2P',b:'DNS2'},{t:68,a:'FLW',b:'BCN'},{t:73,a:'FLW',b:'C2P'},{t:78,a:'FLW',b:'FLQ'},{t:80,a:'FLW',b:'TCP'},{t:82,a:'FLW',b:'DNS2'},{t:84,a:'FLW',b:'TLS2'},{t:86,a:'FLW',b:'HTP'},...Array.from({length:12},(_,i)=>({t:128+i*4,a:'CON',b:['FLQ','TCP','DNS2','TLS2','HTP','BCN','C2P','FLW','FLQ','BCN','C2P','FLW'][i]}))],
+storm:{id:'FLQ',t0:0,t1:25,rate:.7,col:'#c792ea44'}},
+
+{name:'FUZZ SWARM',sub:'2.1M syscalls · AFL++ 37K execs + libfuzzer 1M execs · 30s · ASAN confirmed',tt:150,
+phases:[
+{id:'AFL',ti:1,t0:0,t1:80,l:'AFL++',d:'1,245 exec/s · fork server · EXPLORE',sc:1083838},
+{id:'LF',ti:1,t0:0,t1:80,l:'LIBFUZZER',d:'35K exec/s · coverage guided · 2 workers',sc:1051698},
+{id:'MUT',ti:1,t0:5,t1:75,l:'MUTATOR',d:'havoc · splice · bit flip · arith',sc:50000},
+{id:'COV',ti:2,t0:10,t1:90,l:'COVERAGE',d:'edge map · 44% coverage · 13 new paths',sc:5000},
+{id:'TRI',ti:2,t0:20,t1:100,l:'CRASH TRIAGE',d:'dedup · minimize · classify',sc:3000},
+{id:'ASN',ti:2,t0:80,t1:120,l:'ASAN CONFIRM',d:'sanitizer replay · stack trace',sc:1000},
+{id:'CON',ti:3,t0:120,t1:145,l:'CONSENSUS',d:'cross-fuzzer crash reinforcement',sc:100},
+],
+outer:['parse_name','alloc_payload','parse_extensions','type_name','parse_chain','parse_packet','memcpy:45','memcpy:73','malloc:56','strlen:118','free:85','free:96','fread:main','hdr→magic','hdr→type','hdr→flags','hdr→name_len','hdr→ext_count','ext→ext_len','ext→ext_type','SIGABRT','SIGSEGV','stack-bof','heap-oob','null-deref','uaf','int-overflow','fmt-string','edge:0x4012','edge:0x4038'],
+ol:'CODE PATHS & BUG CLASSES',
+findings:[
+// AFL early execution (rapid fire)
+...Array.from({length:8},(_,i)=>({t:3+i*2,f:'AFL',s:'INFO',m:'new path #'+(i+1)+' (havoc)'})),
+{t:20,f:'AFL',s:'HIGH',m:'CRASH sig:06 SIGABRT at exec 7543'},
+// libfuzzer faster, finds more paths
+...Array.from({length:12},(_,i)=>({t:2+i*1.5,f:'LF',s:'INFO',m:'NEW cov: edge '+(i+1)+' ('+['bit flip','arith','splice','havoc','insert','erase','change byte','crossover','mutate','custom','copy','shuffle'][i]+')'})),
+{t:15,f:'LF',s:'CRITICAL',m:'CRASH SEGV strlen NULL at parser.c:118'},
+{t:16,f:'LF',s:'HIGH',m:'UBSan: undefined behavior parser.c:118:31'},
+// mutator signals
+{t:10,f:'MUT',s:'LOW',m:'havoc stage: 8 ops per cycle'},
+{t:25,f:'MUT',s:'LOW',m:'splice: combining corpus entries'},
+{t:40,f:'MUT',s:'MEDIUM',m:'dictionary: SMSH magic found useful'},
+// coverage tracking
+{t:15,f:'COV',s:'MEDIUM',m:'coverage jump: 6 → 13 edges'},
+{t:30,f:'COV',s:'LOW',m:'coverage plateau at 44%'},
+{t:50,f:'COV',s:'MEDIUM',m:'new edge via ext_count overflow path'},
+// crash triage
+{t:25,f:'TRI',s:'HIGH',m:'crash dedup: AFL + libfuzzer same root cause'},
+{t:35,f:'TRI',s:'MEDIUM',m:'minimized: 12 bytes reproducer'},
+{t:45,f:'TRI',s:'HIGH',m:'classify: null-deref via type=0xFF'},
+// ASAN confirmation
+{t:85,f:'ASN',s:'CRITICAL',m:'CONFIRMED: SEGV in strlen (parser.c:118)'},
+{t:90,f:'ASN',s:'HIGH',m:'stack trace: parse_packet→type_name→strlen'},
+{t:95,f:'ASN',s:'HIGH',m:'root cause: type_name(0xFF) returns NULL'},
+// consensus
+{t:125,f:'CON',s:'CRITICAL',m:'CONSENSUS: null-deref confirmed by AFL+LF+ASAN'},
+{t:130,f:'CON',s:'HIGH',m:'2 fuzzers · 1 sanitizer · same crash · 12 byte PoC'},
+{t:135,f:'CON',s:'CRITICAL',m:'BUG CLASS: CWE-476 NULL Pointer Dereference'},
+{t:140,f:'CON',s:'HIGH',m:'44% coverage · 13 paths · 37K+1M execs in 30s'},
+],
+reinforcements:[
+// libfuzzer confirms AFL path
+{t:18,a:'LF',b:'AFL'},{t:22,a:'LF',b:'AFL'},
+// coverage confirms both
+{t:20,a:'COV',b:'AFL'},{t:25,a:'COV',b:'LF'},
+// triage confirms crash is same
+{t:30,a:'TRI',b:'AFL'},{t:32,a:'TRI',b:'LF'},
+// mutator feeds both
+{t:35,a:'MUT',b:'AFL'},{t:38,a:'MUT',b:'LF'},
+// ASAN confirms everything
+{t:88,a:'ASN',b:'AFL'},{t:90,a:'ASN',b:'LF'},{t:92,a:'ASN',b:'TRI'},
+// consensus mass reinforcement
+...Array.from({length:10},(_,i)=>({t:122+i*2,a:'CON',b:['AFL','LF','MUT','COV','TRI','ASN','AFL','LF','TRI','ASN'][i]})),
+],
+storm:{id:'AFL',t0:0,t1:80,rate:.9,col:'#f8717155'}},
+
+{name:'DARK POOL',sub:'809 syscalls · 10K trades · 74 findings · Polygon.io tick-level · 75ms',tt:160,
+phases:[
+{id:'CLS',ti:1,t0:0,t1:15,l:'DARK CLASSIFIER',d:'TRF exchange ID → dark/lit split',sc:200},
+{id:'VOL',ti:1,t0:5,t1:25,l:'VOLUME PROFILER',d:'z-score on dark% · block concentration',sc:150},
+{id:'BLK',ti:1,t0:10,t1:35,l:'BLOCK DETECTOR',d:'≥1K prints · mega blocks ≥10K',sc:120},
+{id:'PER',ti:1,t0:15,t1:50,l:'PERIODICITY',d:'LSR (Random Matrix) on dark flow timing',sc:100},
+{id:'DIV',ti:2,t0:30,t1:60,l:'PRICE DIVERGE',d:'dark VWAP vs lit NBBO · bps spread',sc:80},
+{id:'CRX',ti:2,t0:40,t1:75,l:'CROSS-TICKER',d:'correlated dark elevation across names',sc:60},
+{id:'ANM',ti:2,t0:50,t1:85,l:'ANOMALY ENGINE',d:'EWMA on dark volume · deviation scoring',sc:50},
+{id:'CON',ti:3,t0:90,t1:140,l:'CONSENSUS',d:'multi-agent signal reinforcement',sc:50},
+],
+outer:['AAPL','NVDA','TSLA','META','MSFT','AMZN','JPM','SPY','QQQ','GME','ex:FINRA-ADF','ex:NYSE-TRF','ex:NASDAQ-TRF','ex:Cboe-TRF','dark:34%','dark:59%','dark:54%','dark:56%','block:500K','block:120K','block:275K','flow:2077','flow:443','LSR:0.964','LSR:0.979','LSR:0.973','VWAP:div','EWMA:spike','GOE:regime','CWE:none'],
+ol:'TICKERS & SIGNALS',
+findings:[
+// classifier
+{t:3,f:'CLS',s:'HIGH',m:'NVDA 59% dark pool'},{t:4,f:'CLS',s:'HIGH',m:'MSFT 56% dark pool'},
+{t:5,f:'CLS',s:'MEDIUM',m:'TSLA 54% elevated dark'},{t:6,f:'CLS',s:'INFO',m:'AAPL 34% normal'},
+// volume profiler
+{t:10,f:'VOL',s:'HIGH',m:'JPM block concentration 500K vs avg 5K'},
+{t:12,f:'VOL',s:'HIGH',m:'GME block concentration 120K vs avg 446'},
+{t:14,f:'VOL',s:'HIGH',m:'NVDA block concentration 2K vs avg 60'},
+// block detector - JPM mega blocks
+{t:18,f:'BLK',s:'CRITICAL',m:'JPM MEGA BLOCK 500,000 @ $295.38'},
+{t:19,f:'BLK',s:'CRITICAL',m:'JPM MEGA BLOCK 275,237 @ $295.38'},
+{t:20,f:'BLK',s:'CRITICAL',m:'JPM MEGA BLOCK 200,000 @ $295.38'},
+{t:21,f:'BLK',s:'CRITICAL',m:'JPM MEGA BLOCK 169,669 @ $295.38'},
+{t:22,f:'BLK',s:'CRITICAL',m:'GME MEGA BLOCK 120,600 @ $22.76'},
+{t:24,f:'BLK',s:'HIGH',m:'NVDA 9 blocks ≥1K total 11,313'},
+{t:25,f:'BLK',s:'HIGH',m:'TSLA 6 blocks ≥1K total 8,664'},
+// periodicity - all GOE regime
+{t:28,f:'PER',s:'HIGH',m:'AAPL LSR=0.964 GOE regime'},
+{t:29,f:'PER',s:'HIGH',m:'NVDA LSR=0.979 GOE structured'},
+{t:30,f:'PER',s:'HIGH',m:'TSLA LSR=0.973 GOE algo flow'},
+{t:31,f:'PER',s:'HIGH',m:'SPY LSR=0.979 GOE structured'},
+{t:32,f:'PER',s:'HIGH',m:'GME LSR=0.956 GOE algo flow'},
+// price divergence
+{t:38,f:'DIV',s:'HIGH',m:'SPY dark VWAP 5.2bps below lit'},
+{t:40,f:'DIV',s:'MEDIUM',m:'QQQ dark/lit divergence 2.0bps'},
+// cross-ticker
+{t:48,f:'CRX',s:'HIGH',m:'correlated: NVDA+TSLA+MSFT all >50% dark'},
+{t:52,f:'CRX',s:'MEDIUM',m:'tech sector dark mean 45%'},
+// anomaly
+{t:58,f:'ANM',s:'HIGH',m:'dark volume 2.3x EWMA deviation'},
+// consensus cascade
+{t:95,f:'CON',s:'CRITICAL',m:'JPM CONSENSUS: 22 HIGH+ across BLOCK+PERIODIC+VOLUME'},
+{t:100,f:'CON',s:'CRITICAL',m:'NVDA CONSENSUS: 5 HIGH+ across 5 agents'},
+{t:105,f:'CON',s:'CRITICAL',m:'MSFT CONSENSUS: 5 HIGH+ across 5 agents'},
+{t:110,f:'CON',s:'CRITICAL',m:'TSLA CONSENSUS: 4 HIGH+ across 4 agents'},
+{t:115,f:'CON',s:'CRITICAL',m:'SPY CONSENSUS: 4 HIGH+ across BLOCK+PERIODIC+DIVERGE'},
+{t:120,f:'CON',s:'CRITICAL',m:'GME CONSENSUS: 4 HIGH+ across BLOCK+PERIODIC+VOLUME'},
+{t:125,f:'CON',s:'HIGH',m:'ALL 10 tickers show GOE-regime dark flow'},
+{t:130,f:'CON',s:'HIGH',m:'74 total findings · 809 syscalls · 75ms execution'},
+],
+reinforcements:[
+{t:13,a:'VOL',b:'CLS'},{t:16,a:'BLK',b:'VOL'},{t:23,a:'BLK',b:'CLS'},
+{t:33,a:'PER',b:'CLS'},{t:35,a:'PER',b:'BLK'},{t:42,a:'DIV',b:'VOL'},
+{t:50,a:'CRX',b:'CLS'},{t:55,a:'CRX',b:'PER'},{t:60,a:'ANM',b:'VOL'},
+{t:65,a:'ANM',b:'BLK'},{t:70,a:'CRX',b:'DIV'},
+// consensus mass reinforcement
+...Array.from({length:14},(_,i)=>({t:92+i*3,a:'CON',b:['CLS','VOL','BLK','PER','DIV','CRX','ANM','CLS','VOL','BLK','PER','DIV','CRX','ANM'][i]})),
+],
+storm:{id:'CLS',t0:0,t1:15,rate:.6,col:'#e8a03044'}},
+];
+
+const T1L=['DRAGNET','SCANNERS','HUNTERS','OSI LAYERS','FUZZERS','CLASSIFIERS'],T2L=['DEEP ANALYSIS','CORRELATOR','DEEP CORRELATION','FLOW CORRELATION','CRASH TRIAGE','CROSS-TICKER'];
+
+function initStars(){starField.length=0;for(let i=0;i<300;i++)starField.push({x:Math.random()*W,y:Math.random()*H,r:Math.random()*1.2+.2,speed:.02+Math.random()*.08,alpha:.1+Math.random()*.3,tw:Math.random()*Math.PI*2})}
+
+function layout(){Object.keys(nodes).forEach(k=>delete nodes[k]);edges.length=0;outerN.length=0;if(!W)return;const M=M_DATA[activeTab],cx=W/2,cy=H/2;
+nodes.O={x:cx,y:cy-20,r:18,glow:.35,ti:0,l:'SMESH',halo:0};
+const mk=(ti,yOff,rx,ry)=>{const ps=M.phases.filter(p=>p.ti===ti);ps.forEach((p,i,a)=>{const ang=a.length>1?Math.PI+(i/(a.length-1))*Math.PI:Math.PI*1.5;const R=Math.min(W,H);nodes[p.id]={x:cx+Math.cos(ang)*R*rx,y:cy+yOff+Math.sin(ang)*R*ry,r:8,glow:0,ti,l:p.l,ph:p,halo:0}})};
+mk(1,-70,.3,.17);mk(2,55,.3,.14);
+const cp=M.phases.find(p=>p.ti===3);if(cp)nodes[cp.id]={x:cx,y:cy+H*.28,r:13,glow:0,ti:3,l:cp.l,ph:cp,halo:0};
+M.phases.filter(p=>p.ti===1).forEach(p=>edges.push({a:'O',b:p.id,glow:0}));
+M.phases.filter(p=>p.ti===1).forEach(p1=>M.phases.filter(p=>p.ti===2).forEach(p2=>{if(Math.random()<.22)edges.push({a:p1.id,b:p2.id,glow:0})}));
+if(cp)M.phases.filter(p=>p.ti===2).forEach(p=>edges.push({a:p.id,b:cp.id,glow:0}));
+if(cp)M.phases.filter(p=>p.ti===1).forEach(p=>{if(Math.random()<.25)edges.push({a:p.id,b:cp.id,glow:0})});
+M.outer.forEach((name,i)=>{const a=(i/M.outer.length)*Math.PI*2-Math.PI/2;const r=Math.min(W,H)*.44;outerN.push({x:cx+Math.cos(a)*r,y:cy+Math.sin(a)*r,r:2.5,glow:0,l:name.split('/').pop(),disc:false})})}
+
+function sz(){W=innerWidth;H=innerHeight;C.width=W*D;C.height=H*D;C.style.width=W+'px';C.style.height=H+'px';X.setTransform(D,0,0,D,0,0);initStars();layout()}
+sz();addEventListener('resize',sz);
+
+window.switchTab=function(i){activeTab=i;document.querySelectorAll('#v-tabs .tab').forEach((t,j)=>t.classList.toggle('active',j===i));resetState();layout();document.getElementById('h-sub').textContent=M_DATA[i].sub};
+
+function bezPt(ax,ay,mx,my,bx,by,t){const u=1-t;return{x:u*u*ax+2*u*t*mx+t*t*bx,y:u*u*ay+2*u*t*my+t*t*by}}
+function emit(fx,fy,tx,ty,col,spd,sz){const mx=(fx+tx)/2+(Math.random()-.5)*40,my=(fy+ty)/2+(Math.random()-.5)*40-15;particles.push({x:fx,y:fy,ox:fx,oy:fy,tx,ty,mx,my,t:0,spd:spd||.02,col,sz:sz||2.5})}
+function burst(x,y,col,n){for(let i=0;i<(n||10);i++){const a=Math.random()*Math.PI*2,d=25+Math.random()*50;emit(x,y,x+Math.cos(a)*d,y+Math.sin(a)*d,col,.012+Math.random()*.015,1+Math.random()*2)}}
+function shock(x,y,col){shockwaves.push({x,y,r:0,maxR:80+Math.random()*40,col,alpha:1})}
+function ePulse(f,t,col){const a=nodes[f],b=nodes[t];if(a&&b)pulseWaves.push({ax:a.x,ay:a.y,bx:b.x,by:b.y,t:0,col})}
+function tick(msg,col){const e=document.createElement('div');e.className='ti';e.style.border='1px solid '+col+'44';e.style.color=col;e.textContent=msg;tickEl.prepend(e);ticks.unshift(e);if(ticks.length>14){const o=ticks.pop();o.style.opacity='0';setTimeout(()=>o.remove(),600)}}
+
+function frame(now){requestAnimationFrame(frame);const M=M_DATA[activeTab],dt=1/60;if(play)T+=dt*speed;if(T>M.tt+4)resetState();const t=T;
+if(now-lastSec>1e3){dSps=sigSec;sigSec=0;lastSec=now}
+let sc=0;M.phases.forEach(p=>{if(t>=p.t0)sc+=Math.floor(p.sc*Math.min(1,(t-p.t0)/(p.t1-p.t0)))});
+const cur=M.phases.find(p=>t>=p.t0&&t<=p.t1);
+document.getElementById('p-name').textContent=cur?cur.l:(t>M.tt-15?'COMPLETE':'...');
+document.getElementById('p-det').textContent=cur?cur.d:'';
+document.getElementById('m-sig').textContent=dSps;
+document.getElementById('m-sys').textContent=sc.toLocaleString();
+document.getElementById('m-fnd').textContent=finds;
+document.getElementById('m-con').textContent=cons;
+X.clearRect(0,0,W,H);
+// stars
+for(const s of starField){s.tw+=.02;s.y+=s.speed;if(s.y>H){s.y=0;s.x=Math.random()*W}X.beginPath();X.arc(s.x,s.y,s.r,0,Math.PI*2);X.fillStyle=`rgba(140,160,200,${s.alpha*(.7+Math.sin(s.tw)*.3)})`;X.fill()}
+// nebula
+const ng=X.createRadialGradient(W/2,H/2,0,W/2,H/2,Math.max(W,H)*.5);ng.addColorStop(0,'rgba(77,143,236,.03)');ng.addColorStop(.5,'rgba(199,146,234,.015)');ng.addColorStop(1,'transparent');X.fillStyle=ng;X.fillRect(0,0,W,H);
+// aura
+auraAlpha*=.97;if(auraAlpha>.005){X.fillStyle=`rgba(255,30,30,${auraAlpha*.08})`;X.fillRect(0,0,W,H)}
+// edges
+for(const e of edges){const a=nodes[e.a],b=nodes[e.b];if(!a||!b)continue;X.beginPath();X.moveTo(a.x,a.y);const my=(a.y+b.y)/2;X.bezierCurveTo(a.x,my,b.x,my,b.x,b.y);if(e.glow>.04){X.strokeStyle=`rgba(77,143,236,${e.glow*.4})`;X.lineWidth=1.5;X.shadowColor=COL.edgeG;X.shadowBlur=6*e.glow}else{X.strokeStyle=COL.dimE;X.lineWidth=.4;X.shadowBlur=0}X.stroke();X.shadowBlur=0;e.glow*=.93}
+// edge pulses
+for(let i=pulseWaves.length-1;i>=0;i--){const p=pulseWaves[i];p.t+=.025;if(p.t>=1){pulseWaves.splice(i,1);continue}const my=(p.ay+p.by)/2;const pt=bezPt(p.ax,p.ay,(p.ax+p.bx)/2,my,p.bx,p.by,p.t);const al=p.t<.8?1:(1-p.t)*5;X.beginPath();X.arc(pt.x,pt.y,3,0,Math.PI*2);X.fillStyle=p.col;X.shadowColor=p.col;X.shadowBlur=15;X.globalAlpha=al*.7;X.fill();X.globalAlpha=1;X.shadowBlur=0}
+// outer
+const dp=M.phases[0];for(let i=0;i<outerN.length;i++){const s=outerN[i];if(t>1&&!s.disc&&t<(dp.t1+3)){const fr=(t-1)/dp.t1;if(i<fr*outerN.length){s.disc=true;s.glow=1;const sf=nodes[dp.id];if(sf){emit(sf.x,sf.y,s.x,s.y,COL.subLit,.025,1.5);sigSec++}}}
+X.beginPath();X.arc(s.x,s.y,s.r,0,Math.PI*2);if(s.glow>.04){X.fillStyle=COL.subLit;X.shadowColor=COL.subLit;X.shadowBlur=10*s.glow;X.fill();X.shadowBlur=0}else if(s.disc){X.fillStyle=COL.sub;X.fill()}else{X.fillStyle='rgba(15,15,30,.25)';X.fill()}s.glow*=.955}
+// storm
+if(M.storm){const st=M.storm,sn=nodes[st.id];if(sn&&t>=st.t0&&t<=st.t1&&Math.random()<st.rate){const si=Math.floor(Math.random()*outerN.length);if(outerN[si].disc)emit(sn.x,sn.y,outerN[si].x,outerN[si].y,st.col,.05,.8);sigSec++}}
+// phases
+for(const p of M.phases){const n=nodes[p.id];if(!n)continue;const on=t>=p.t0&&t<=p.t1,done=t>p.t1;
+if(on&&!actPh.has(p.id)){actPh.add(p.id);n.glow=1;n.halo=1;const c=p.ti===1?COL.t1:p.ti===2?COL.t2:COL.t3;burst(n.x,n.y,c,18);edges.filter(e=>e.b===p.id&&e.a==='O').forEach(e=>{e.glow=1;ePulse('O',p.id,c)});tick('▶ '+p.l,c)}
+if(on){n.glow=Math.max(n.glow,.55+Math.sin(t*4)*.15);n.halo=Math.max(n.halo,.3);if(Math.random()<.02)sigSec++}
+const tgt=on?.75:(done?.12:0);n.glow+=(tgt-n.glow)*.04;n.halo*=.985}
+// findings
+M.findings.forEach((f,i)=>{if(t>=f.t&&!firedF.has(i)){firedF.add(i);finds++;const n=nodes[f.f];if(!n)return;const c=COL.sev[f.s]||COL.sev.MEDIUM;burst(n.x,n.y,c,8);n.glow=1;n.halo=1;if(nodes.CON)emit(n.x,n.y,nodes.CON.x,nodes.CON.y,c,.018,2.5);if(f.s==='CRITICAL'){shock(n.x,n.y,c);auraAlpha=1}if(f.s==='HIGH')auraAlpha=Math.max(auraAlpha,.4);tick('['+f.s+'] '+f.m,c);sigSec+=3}});
+// reinforcements
+M.reinforcements.forEach((r,i)=>{if(t>=r.t&&!firedR.has(i)){firedR.add(i);cons++;const a=nodes[r.a],b=nodes[r.b];if(a&&b){emit(a.x,a.y,b.x,b.y,COL.reinforce,.03,3.5);emit(b.x,b.y,a.x,a.y,COL.reinforce,.025,2.5);ePulse(r.a,r.b,COL.reinforce);a.glow=Math.max(a.glow,.85);b.glow=Math.max(b.glow,.85);a.halo=Math.max(a.halo,.6);b.halo=Math.max(b.halo,.6);sigSec+=2}}});
+// shockwaves
+for(let i=shockwaves.length-1;i>=0;i--){const s=shockwaves[i];s.r+=2.5;s.alpha=1-s.r/s.maxR;if(s.alpha<=0){shockwaves.splice(i,1);continue}X.beginPath();X.arc(s.x,s.y,s.r,0,Math.PI*2);X.strokeStyle=s.col;X.lineWidth=2;X.globalAlpha=s.alpha*.5;X.shadowColor=s.col;X.shadowBlur=12;X.stroke();X.beginPath();X.arc(s.x,s.y,s.r*.7,0,Math.PI*2);X.lineWidth=1;X.globalAlpha=s.alpha*.25;X.stroke();X.globalAlpha=1;X.shadowBlur=0}
+// nodes
+for(const[id,n]of Object.entries(nodes)){
+if(n.halo>.02){const hR=n.r*4+n.halo*30;let c=n.ti===0?COL.orch:n.ti===1?COL.t1:n.ti===2?COL.t2:COL.t3;const hg=X.createRadialGradient(n.x,n.y,0,n.x,n.y,hR);hg.addColorStop(0,c+'33');hg.addColorStop(1,'transparent');X.fillStyle=hg;X.fillRect(n.x-hR,n.y-hR,hR*2,hR*2)}
+X.beginPath();X.arc(n.x,n.y,n.r,0,Math.PI*2);if(n.glow>.04){let c=n.ti===0?COL.orch:n.ti===1?COL.t1:n.ti===2?COL.t2:COL.t3;X.fillStyle=c;X.shadowColor=c;X.shadowBlur=22*n.glow;X.fill();X.shadowBlur=0;if(n.glow>.35){X.beginPath();X.arc(n.x,n.y,n.r+(1-n.glow)*28,0,Math.PI*2);X.strokeStyle=`rgba(77,143,236,${n.glow*.2})`;X.lineWidth=.8;X.stroke()}}else{X.fillStyle=COL.dim;X.fill()}
+if(n.l&&(n.glow>.08||n.ti===0||n.ti===3)){X.fillStyle=n.glow>.08?`rgba(228,228,237,${Math.max(n.glow,.35)})`:'rgba(74,74,100,.35)';X.font=(n.ti===0||n.ti===3?'600 10px':'500 7px')+' var(--mono)';X.textAlign='center';X.fillText(n.l,n.x,n.y+n.r+13)}
+n.glow*=.96}
+const o=nodes.O;if(o)o.glow=Math.max(o.glow,.3+Math.sin(t*2)*.12);
+// particles
+for(let i=particles.length-1;i>=0;i--){const p=particles[i];p.t+=p.spd;if(p.t>=1){particles.splice(i,1);continue}const pt=bezPt(p.ox,p.oy,p.mx,p.my,p.tx,p.ty,p.t);const px=p.x,py=p.y;p.x=pt.x;p.y=pt.y;const al=p.t<.75?1:(1-p.t)*4;const dx=p.x-px,dy=p.y-py,len=Math.sqrt(dx*dx+dy*dy);if(len>1&&al>.1){X.beginPath();X.moveTo(p.x-dx*2,p.y-dy*2);X.lineTo(p.x,p.y);X.strokeStyle=p.col;X.lineWidth=p.sz*.7;X.globalAlpha=al*.4;X.shadowColor=p.col;X.shadowBlur=8;X.stroke();X.shadowBlur=0}X.beginPath();X.arc(p.x,p.y,p.sz*(1+p.t*.3),0,Math.PI*2);X.fillStyle=p.col;X.shadowColor=p.col;X.shadowBlur=14;X.globalAlpha=al;X.fill();X.globalAlpha=1;X.shadowBlur=0}
+// scan lines
+X.fillStyle='rgba(0,0,0,.03)';for(let y=0;y<H;y+=3)X.fillRect(0,y,W,1);
+// labels
+X.font='500 9px var(--sans)';X.textAlign='left';X.fillStyle='rgba(74,74,100,.25)';X.fillText('SMESH TIER 1 — '+(T1L[activeTab]||'AGENTS'),12,38);X.fillText('SMESH TIER 2 — '+(T2L[activeTab]||'ANALYSIS'),12,H-40);X.textAlign='center';if(t>M.tt-30&&nodes.CON)X.fillText('SMESH TIER 3 — CONSENSUS',W/2,nodes.CON.y+30);X.textAlign='right';X.fillStyle='rgba(74,74,100,.15)';X.fillText(M.ol||'',W-12,H-10)}
+
+requestAnimationFrame(frame);
+
+document.querySelectorAll('#v-tabs .tab').forEach(t=>t.addEventListener('click',()=>switchTab(+t.dataset.tab)));
+addEventListener('keydown',e=>{
+if(e.key===' '){play=!play;e.preventDefault()}
+if(e.key==='+'||e.key==='=')speed=Math.min(speed*1.5,30);
+if(e.key==='-')speed=Math.max(speed/1.5,.5);
+if(e.key==='r'||e.key==='R')resetState();
+if(e.key==='Escape')exitViz();
+if(e.key>='1'&&e.key<='6')switchTab(+e.key-1);
+});
+} // end initViz
+</script>
+</body>
+</html>
