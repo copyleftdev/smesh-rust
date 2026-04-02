@@ -184,6 +184,7 @@ nav .nav-r a:hover{color:var(--text)}
     <div class="tab" data-tab="3">OSI · PCAP</div>
     <div class="tab" data-tab="4">FUZZ SWARM</div>
     <div class="tab" data-tab="5">DARK POOL</div>
+    <div class="tab" data-tab="6">CI/CD SUPPLY</div>
   </div>
   <div id="viz-ui">
     <div id="v-hud">
@@ -201,7 +202,7 @@ nav .nav-r a:hover{color:var(--text)}
     </div>
     <div id="v-ticker"></div>
     <div id="v-prov">Not a simulation. Derived from strace -f -c kernel capture.<br>Syscall counts are real. Decay: I(t) = I₀·e⁻ᵏᵗ</div>
-    <div id="v-keys">SPACE pause · +/- speed · R restart · ESC exit · 1-6 missions</div>
+    <div id="v-keys">SPACE pause · +/- speed · R restart · ESC exit · 1-7 missions</div>
   </div>
   <canvas id="c"></canvas>
 </div>
@@ -231,6 +232,7 @@ nav .nav-r a:hover{color:var(--text)}
     {label:'OSI · PCAP',sub:'Physics finds the beacon',col:'#34d399',idx:3,glow:.3,halo:0},
     {label:'Fuzz Swarm',sub:'2.1M syscalls · 30s',col:'#ff6633',idx:4,glow:.3,halo:0},
     {label:'Dark Pool',sub:'10K trades · Polygon.io',col:'#e8a030',idx:5,glow:.3,halo:0},
+    {label:'CI/CD Supply',sub:'33 workflows · next.js',col:'#82aaff',idx:6,glow:.3,halo:0},
   ];
   const medges=[],mparticles=[],mstars=[];
   let hover=-1;
@@ -596,9 +598,71 @@ reinforcements:[
 ...Array.from({length:14},(_,i)=>({t:92+i*3,a:'CON',b:['CLS','VOL','BLK','PER','DIV','CRX','ANM','CLS','VOL','BLK','PER','DIV','CRX','ANM'][i]})),
 ],
 storm:{id:'CLS',t0:0,t1:15,rate:.6,col:'#e8a03044'}},
+
+{name:'CI/CD SUPPLY CHAIN',sub:'40K syscalls · 33 workflows · 85 secret refs · gh CLI + gitleaks · 2.8s',tt:180,
+phases:[
+{id:'INJ',ti:1,t0:0,t1:25,l:'INJECTION SCAN',d:'${{ github.event }} in run: blocks',sc:3000},
+{id:'PRM',ti:1,t0:5,t1:30,l:'PERMISSIONS',d:'write-all · missing blocks · OIDC',sc:2500},
+{id:'ACT',ti:1,t0:10,t1:40,l:'ACTION SUPPLY',d:'unpinned refs · SHA audit · 26 actions',sc:4000},
+{id:'SEC',ti:1,t0:15,t1:45,l:'SECRETS SCAN',d:'85 refs · 38 in env: · gitleaks',sc:5000},
+{id:'TRG',ti:2,t0:35,t1:70,l:'TRIGGER AUDIT',d:'workflow_run · issue_comment · dispatch',sc:2000},
+{id:'CTR',ti:2,t0:45,t1:85,l:'CONTRIBUTOR',d:'gh CLI · commit history · author analysis',sc:15000},
+{id:'CHA',ti:2,t0:70,t1:110,l:'CHAIN ANALYSIS',d:'injection → permission → exfil path',sc:3000},
+{id:'CON',ti:3,t0:115,t1:165,l:'CONSENSUS',d:'cross-agent signal reinforcement',sc:100},
+],
+outer:['build_and_deploy','build_and_test','build_reusable','code_freeze','create_release','deploy_docs','graphite_ci','integration_tests','issue_lock','issue_stale','issue_wrong','popular','pr_stats','release_rspack','retry_deploy','retry_test','rspack_build','rspack_dev','rspack_manifest','setup_build','test_e2e_deploy','test_e2e_reset','test_examples','trigger_release','turbopack_bench','turbopack_build','turbopack_dev','turbopack_manifest','update_fonts','update_react','upload_manifest','triage','test_rust_bench'],
+ol:'WORKFLOW FILES',
+findings:[
+// injection scanner
+{t:4,f:'INJ',s:'HIGH',m:'19 injection points: github.event in run:'},
+{t:6,f:'INJ',s:'HIGH',m:'trigger_release.yml: event.inputs in env'},
+{t:8,f:'INJ',s:'HIGH',m:'test_e2e_deploy: 6 unvalidated inputs'},
+{t:10,f:'INJ',s:'HIGH',m:'retry_test.yml: workflow_run context in URL'},
+// permissions
+{t:12,f:'PRM',s:'HIGH',m:'6 elevated: contents:write + id-token:write'},
+{t:14,f:'PRM',s:'MEDIUM',m:'24 workflows missing permissions block'},
+{t:16,f:'PRM',s:'HIGH',m:'build_and_deploy: 3 jobs with write perms'},
+// action supply chain
+{t:20,f:'ACT',s:'MEDIUM',m:'14 unpinned actions (tag not SHA)'},
+{t:22,f:'ACT',s:'INFO',m:'12 SHA-pinned actions (secure)'},
+{t:24,f:'ACT',s:'HIGH',m:'actions/checkout@v3 outdated + unpinned'},
+{t:26,f:'ACT',s:'MEDIUM',m:'actions/cache@v3 deprecated version'},
+// secrets
+{t:28,f:'SEC',s:'MEDIUM',m:'85 secret references across workflows'},
+{t:30,f:'SEC',s:'HIGH',m:'38 secrets exposed via env: blocks'},
+{t:32,f:'SEC',s:'MEDIUM',m:'release workflows: NPM_TOKEN in env'},
+// triggers
+{t:40,f:'TRG',s:'HIGH',m:'workflow_run in 2 files (priv esc vector)'},
+{t:43,f:'TRG',s:'HIGH',m:'issue_comment trigger in triage.yml'},
+{t:46,f:'TRG',s:'MEDIUM',m:'21 workflows with workflow_dispatch'},
+// contributor
+{t:55,f:'CTR',s:'INFO',m:'10 unique authors on workflow changes'},
+{t:60,f:'CTR',s:'MEDIUM',m:'dagecko: pinned 19 actions (security fix)'},
+{t:65,f:'CTR',s:'INFO',m:'mmastrac: 4 commits (docker/turbopack)'},
+// chain analysis
+{t:75,f:'CHA',s:'CRITICAL',m:'CHAIN: issue_comment → injection → secret exfil'},
+{t:80,f:'CHA',s:'HIGH',m:'CHAIN: workflow_run → inherited perms → write access'},
+{t:85,f:'CHA',s:'HIGH',m:'CHAIN: unpinned action → tag hijack → code exec'},
+{t:90,f:'CHA',s:'MEDIUM',m:'CHAIN: missing perms → default write → artifact poison'},
+// consensus
+{t:120,f:'CON',s:'CRITICAL',m:'CONSENSUS: 19 injection + 24 no perms + 14 unpinned'},
+{t:125,f:'CON',s:'CRITICAL',m:'3 exploitable chains identified'},
+{t:130,f:'CON',s:'HIGH',m:'85 secret refs · 38 exposed via env'},
+{t:135,f:'CON',s:'HIGH',m:'vercel/next.js CI/CD attack surface: HIGH'},
+{t:140,f:'CON',s:'CRITICAL',m:'MITRE: T1195.002 Supply Chain Compromise'},
+],
+reinforcements:[
+{t:13,a:'PRM',b:'INJ'},{t:18,a:'ACT',b:'PRM'},{t:25,a:'SEC',b:'INJ'},
+{t:35,a:'SEC',b:'ACT'},{t:45,a:'TRG',b:'INJ'},{t:50,a:'TRG',b:'PRM'},
+{t:58,a:'CTR',b:'ACT'},{t:68,a:'CTR',b:'TRG'},
+{t:78,a:'CHA',b:'INJ'},{t:82,a:'CHA',b:'PRM'},{t:86,a:'CHA',b:'ACT'},
+{t:88,a:'CHA',b:'SEC'},{t:92,a:'CHA',b:'TRG'},{t:95,a:'CHA',b:'CTR'},
+...Array.from({length:14},(_,i)=>({t:118+i*3,a:'CON',b:['INJ','PRM','ACT','SEC','TRG','CTR','CHA','INJ','PRM','ACT','SEC','TRG','CTR','CHA'][i]})),
+],
+storm:{id:'INJ',t0:0,t1:25,rate:.5,col:'#f8717144'}},
 ];
 
-const T1L=['DRAGNET','SCANNERS','HUNTERS','OSI LAYERS','FUZZERS','CLASSIFIERS'],T2L=['DEEP ANALYSIS','CORRELATOR','DEEP CORRELATION','FLOW CORRELATION','CRASH TRIAGE','CROSS-TICKER'];
+const T1L=['DRAGNET','SCANNERS','HUNTERS','OSI LAYERS','FUZZERS','CLASSIFIERS','SCANNERS'],T2L=['DEEP ANALYSIS','CORRELATOR','DEEP CORRELATION','FLOW CORRELATION','CRASH TRIAGE','CROSS-TICKER','CHAIN ANALYSIS'];
 
 function initStars(){starField.length=0;for(let i=0;i<300;i++)starField.push({x:Math.random()*W,y:Math.random()*H,r:Math.random()*1.2+.2,speed:.02+Math.random()*.08,alpha:.1+Math.random()*.3,tw:Math.random()*Math.PI*2})}
 
@@ -685,7 +749,7 @@ if(e.key==='+'||e.key==='=')speed=Math.min(speed*1.5,30);
 if(e.key==='-')speed=Math.max(speed/1.5,.5);
 if(e.key==='r'||e.key==='R')resetState();
 if(e.key==='Escape')exitViz();
-if(e.key>='1'&&e.key<='6')switchTab(+e.key-1);
+if(e.key>='1'&&e.key<='7')switchTab(+e.key-1);
 });
 } // end initViz
 </script>
