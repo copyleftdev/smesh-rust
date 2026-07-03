@@ -1,5 +1,5 @@
 use anyhow::Result;
-use smesh_agent::{OllamaClient, OllamaConfig};
+use smesh_agent::{OpenRouterClient, OpenRouterConfig};
 use smesh_core::{Field, FindingPayloadCompact, Node, Signal, SignalType};
 use std::collections::HashMap;
 use std::fs;
@@ -105,16 +105,19 @@ pub async fn run_review(repo_path: &Path, model: &str) -> Result<Vec<Finding>> {
     let rust_files = collect_rust_files(repo_path)?;
     println!("📂 Found {} Rust files to review\n", rust_files.len());
 
-    // Initialize Ollama client
-    let config = OllamaConfig {
-        model: model.to_string(),
-        ..Default::default()
-    };
-    let client = OllamaClient::new(config);
+    // Initialize OpenRouter client (credentials from env / ~/.creds/openrouter.env)
+    let config = OpenRouterConfig::from_env()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "OpenRouter not configured. Set OPENROUTER_API_KEY (or add it to ~/.creds/openrouter.env)"
+            )
+        })?
+        .with_model(model);
+    let client = OpenRouterClient::new(config);
 
-    // Check Ollama connection
+    // Check OpenRouter connection
     if !client.is_available().await {
-        anyhow::bail!("Ollama not available. Run: ollama serve");
+        anyhow::bail!("OpenRouter not reachable (check OPENROUTER_API_KEY and network)");
     }
 
     let mut all_findings: Vec<Finding> = Vec::new();
@@ -213,7 +216,7 @@ pub async fn run_review(repo_path: &Path, model: &str) -> Result<Vec<Finding>> {
                 }
             }
 
-            // Small delay to avoid hammering Ollama
+            // Small delay to avoid hammering the API
             sleep(Duration::from_millis(100)).await;
         }
 

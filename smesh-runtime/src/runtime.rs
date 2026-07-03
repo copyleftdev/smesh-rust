@@ -113,13 +113,18 @@ impl SmeshRuntime {
     }
 
     /// Emit a signal into the network
-    pub async fn emit(&self, signal: Signal, node_id: &str) -> Option<String> {
+    pub async fn emit(&self, mut signal: Signal, node_id: &str) -> Option<String> {
         let mut network = self.network.write().await;
 
         // Check if node exists first
         if !network.nodes.contains_key(node_id) {
             return None;
         }
+
+        // Stamp the emitting node as the signal's origin and seed its diffusion
+        // frontier there, so the signal can spread outward from this node.
+        signal.origin_node_id = node_id.to_string();
+        signal.mark_reached(node_id);
 
         // Emit signal anonymously first, then update node stats
         let hash = network.field.emit_anonymous(signal);

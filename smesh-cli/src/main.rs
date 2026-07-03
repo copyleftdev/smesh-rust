@@ -8,7 +8,7 @@ use tracing_subscriber::FmtSubscriber;
 
 use smesh_agent::{
     benchmark_backend, print_comparison, AgentCoordinator, AgentRole, ClaudeClient, ClaudeConfig,
-    CoordinatorConfig, OllamaClient, OllamaConfig, TaskDefinition,
+    CoordinatorConfig, OpenRouterClient, TaskDefinition,
 };
 use smesh_core::{Network, NetworkTopology, Signal, SignalType};
 use smesh_runtime::{RuntimeConfig, SmeshRuntime};
@@ -55,8 +55,8 @@ enum Commands {
         #[arg(short, long, default_value = "3")]
         agents: usize,
 
-        /// Ollama model to use
-        #[arg(short, long, default_value = "deepseek-coder-v2:16b")]
+        /// OpenRouter model to use
+        #[arg(short, long, default_value = "google/gemini-2.5-flash-lite")]
         model: String,
 
         /// Run demo tasks
@@ -64,10 +64,10 @@ enum Commands {
         demo: bool,
     },
 
-    /// Test Ollama connection
-    Ollama {
+    /// Test OpenRouter connection
+    Openrouter {
         /// Model to test
-        #[arg(short, long, default_value = "deepseek-coder-v2:16b")]
+        #[arg(short, long, default_value = "google/gemini-2.5-flash-lite")]
         model: String,
     },
 
@@ -82,11 +82,11 @@ enum Commands {
         nodes: usize,
     },
 
-    /// Compare LLM backends (Ollama vs Claude)
+    /// Compare LLM backends (OpenRouter vs Claude)
     Compare {
-        /// Ollama model to use
-        #[arg(long, default_value = "qwen2.5-coder:7b")]
-        ollama_model: String,
+        /// OpenRouter model to use
+        #[arg(long, default_value = "google/gemini-2.5-flash-lite")]
+        openrouter_model: String,
 
         /// Claude model to use
         #[arg(long, default_value = "claude-sonnet-4-20250514")]
@@ -103,8 +103,8 @@ enum Commands {
         #[arg(short, long)]
         path: PathBuf,
 
-        /// Ollama model to use for review
-        #[arg(short, long, default_value = "qwen2.5-coder:7b")]
+        /// OpenRouter model to use for review
+        #[arg(short, long, default_value = "google/gemini-2.5-flash-lite")]
         model: String,
     },
 
@@ -230,13 +230,13 @@ async fn main() -> Result<()> {
             model,
             demo,
         } => cmd_agents(agents, &model, demo).await,
-        Commands::Ollama { model } => cmd_ollama(&model).await,
+        Commands::Openrouter { model } => cmd_openrouter(&model).await,
         Commands::Bench { signals, nodes } => cmd_bench(signals, nodes).await,
         Commands::Compare {
-            ollama_model,
+            openrouter_model,
             claude_model,
             prompt,
-        } => cmd_compare(&ollama_model, &claude_model, prompt.as_deref()).await,
+        } => cmd_compare(&openrouter_model, &claude_model, prompt.as_deref()).await,
         Commands::Review { path, model } => review::run_review(&path, &model).await.map(|_| ()),
         Commands::Code {
             coders,
@@ -449,26 +449,22 @@ async fn cmd_status() -> Result<()> {
     // Check runtime
     println!("✓ smesh-runtime: OK");
 
-    // Check Ollama
-    print!("  Ollama: ");
-    let client = OllamaClient::default_client();
-    if client.is_available().await {
-        println!("✓ Connected");
-
-        match client.list_models().await {
-            Ok(models) => {
-                println!("  Models available:");
-                for model in models.iter().take(5) {
-                    println!("    - {}", model);
-                }
-                if models.len() > 5 {
-                    println!("    ... and {} more", models.len() - 5);
-                }
+    // Check OpenRouter
+    print!("  OpenRouter: ");
+    match OpenRouterClient::from_env() {
+        Some(client) => {
+            println!("✓ Credentials found (key {})", client.api_key_masked());
+            println!("  Model: {}", client.model());
+            if client.is_available().await {
+                println!("  API: ✓ Reachable");
+            } else {
+                println!("  API: ✗ Not reachable (check key/network)");
             }
-            Err(e) => println!("  Could not list models: {}", e),
         }
-    } else {
-        println!("✗ Not available (start with: ollama serve)");
+        None => {
+            println!("✗ Not configured");
+            println!("  Set OPENROUTER_API_KEY (or add it to ~/.creds/openrouter.env)");
+        }
     }
 
     println!();
@@ -556,6 +552,39 @@ async fn cmd_sim(n_nodes: usize, topology_str: &str, ticks: u64) -> Result<()> {
         final_stats.total_reinforcements
     );
 
+    // Report how far signals actually diffused through the network.
+    {
+        let net = runtime.network();
+        let net_guard = net.read().await;
+        let n_nodes = net_guard.nodes.len().max(1);
+        let reaches: Vec<usize> = net_guard
+            .field
+            .active_signals()
+            .map(|s| s.reached_nodes.len())
+            .collect();
+
+        if !reaches.is_empty() {
+            let max_reach = reaches.iter().copied().max().unwrap_or(0);
+            let avg_reach = reaches.iter().sum::<usize>() as f64 / reaches.len() as f64;
+            let max_hops = net_guard
+                .field
+                .active_signals()
+                .map(|s| s.hops)
+                .max()
+                .unwrap_or(0);
+            println!();
+            println!("Signal diffusion:");
+            println!(
+                "  Avg nodes reached: {:.1}/{} ({:.0}% coverage)",
+                avg_reach,
+                n_nodes,
+                (avg_reach / n_nodes as f64) * 100.0
+            );
+            println!("  Max nodes reached: {}/{}", max_reach, n_nodes);
+            println!("  Max hops travelled: {}", max_hops);
+        }
+    }
+
     Ok(())
 }
 
@@ -565,18 +594,26 @@ async fn cmd_agents(n_agents: usize, model: &str, demo: bool) -> Result<()> {
     println!("╚═══════════════════════════════════════╝");
     println!();
 
-    // Check Ollama first
-    let client = OllamaClient::new(OllamaConfig {
-        model: model.to_string(),
-        ..Default::default()
-    });
+    // Check OpenRouter credentials first
+    let client = match OpenRouterClient::from_env() {
+        Some(mut c) => {
+            c.set_model(model);
+            c
+        }
+        None => {
+            println!(
+                "✗ OpenRouter not configured. Set OPENROUTER_API_KEY (or add it to ~/.creds/openrouter.env)"
+            );
+            return Ok(());
+        }
+    };
 
     if !client.is_available().await {
-        println!("✗ Ollama not available. Start with: ollama serve");
+        println!("✗ OpenRouter not reachable (check OPENROUTER_API_KEY and network)");
         return Ok(());
     }
 
-    println!("✓ Ollama connected");
+    println!("✓ OpenRouter connected");
     println!("  Model: {}", model);
     println!("  Agents: {}", n_agents);
     println!();
@@ -590,7 +627,7 @@ async fn cmd_agents(n_agents: usize, model: &str, demo: bool) -> Result<()> {
         tick_interval_ms: 100,
     };
 
-    let mut coordinator = AgentCoordinator::with_ollama(config, model);
+    let mut coordinator = AgentCoordinator::with_openrouter(config, model);
 
     // Define demo tasks
     let tasks = if demo {
@@ -657,46 +694,43 @@ async fn cmd_agents(n_agents: usize, model: &str, demo: bool) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_ollama(model: &str) -> Result<()> {
-    println!("Testing Ollama connection...");
+async fn cmd_openrouter(model: &str) -> Result<()> {
+    println!("Testing OpenRouter connection...");
     println!("Model: {}", model);
     println!();
 
-    let client = OllamaClient::new(OllamaConfig {
-        model: model.to_string(),
-        ..Default::default()
-    });
+    let client = match OpenRouterClient::from_env() {
+        Some(mut c) => {
+            c.set_model(model);
+            c
+        }
+        None => {
+            println!("✗ OpenRouter not configured");
+            println!("  Set OPENROUTER_API_KEY (or add it to ~/.creds/openrouter.env)");
+            return Ok(());
+        }
+    };
+
+    println!("✓ Credentials found (key {})", client.api_key_masked());
 
     if !client.is_available().await {
-        println!("✗ Ollama not available");
-        println!("  Start with: ollama serve");
+        println!("✗ OpenRouter not reachable (check OPENROUTER_API_KEY and network)");
         return Ok(());
     }
+    println!("✓ API reachable");
 
-    println!("✓ Ollama connected");
-
-    // List models
+    // Confirm the requested model is offered.
     match client.list_models().await {
         Ok(models) => {
             println!("✓ Models available: {}", models.len());
-
-            let has_model = models
-                .iter()
-                .any(|m| m.contains(model.split(':').next().unwrap_or(model)));
-            if has_model {
+            if models.iter().any(|m| m == model) {
                 println!("✓ Model '{}' found", model);
             } else {
-                println!("✗ Model '{}' not found", model);
-                println!("  Available models:");
-                for m in models.iter().take(5) {
-                    println!("    - {}", m);
-                }
-                return Ok(());
+                println!("⚠ Model '{}' not in catalog (it may still work)", model);
             }
         }
         Err(e) => {
-            println!("✗ Could not list models: {}", e);
-            return Ok(());
+            println!("⚠ Could not list models: {}", e);
         }
     }
 
@@ -794,7 +828,7 @@ async fn cmd_bench(n_signals: usize, n_nodes: usize) -> Result<()> {
 }
 
 async fn cmd_compare(
-    ollama_model: &str,
+    openrouter_model: &str,
     claude_model: &str,
     custom_prompt: Option<&str>,
 ) -> Result<()> {
@@ -822,20 +856,27 @@ async fn cmd_compare(
 
     let mut results = Vec::new();
 
-    // Check Ollama
-    print!("Checking Ollama... ");
-    let ollama_config = OllamaConfig {
-        model: ollama_model.to_string(),
-        ..OllamaConfig::default()
+    // Check OpenRouter
+    print!("Checking OpenRouter... ");
+    let openrouter = OpenRouterClient::from_env().map(|mut c| {
+        c.set_model(openrouter_model);
+        c
+    });
+    let openrouter_available = match &openrouter {
+        Some(c) => {
+            let ok = c.is_available().await;
+            if ok {
+                println!("✓ Available (model: {})", openrouter_model);
+            } else {
+                println!("✗ Not reachable (check OPENROUTER_API_KEY)");
+            }
+            ok
+        }
+        None => {
+            println!("✗ Not configured (set OPENROUTER_API_KEY)");
+            false
+        }
     };
-    let ollama = OllamaClient::new(ollama_config);
-
-    let ollama_available = ollama.is_available().await;
-    if ollama_available {
-        println!("✓ Available (model: {})", ollama_model);
-    } else {
-        println!("✗ Not available (start with: ollama serve)");
-    }
 
     // Check Claude
     print!("Checking Claude... ");
@@ -850,9 +891,9 @@ async fn cmd_compare(
 
     println!();
 
-    if !ollama_available && claude_available.is_none() {
+    if !openrouter_available && claude_available.is_none() {
         println!("No backends available. Please:");
-        println!("  - Start Ollama: ollama serve");
+        println!("  - Set OPENROUTER_API_KEY (or add it to ~/.creds/openrouter.env)");
         println!("  - Or set ANTHROPIC_API_KEY environment variable");
         return Ok(());
     }
@@ -864,10 +905,10 @@ async fn cmd_compare(
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         println!();
 
-        // Test Ollama
-        if ollama_available {
-            print!("  Ollama: ");
-            let result = benchmark_backend(&ollama, prompt, *system).await;
+        // Test OpenRouter
+        if let (true, Some(or)) = (openrouter_available, &openrouter) {
+            print!("  OpenRouter: ");
+            let result = benchmark_backend(or, prompt, *system).await;
             if result.success {
                 println!("✓ {:.2}s", result.total_latency.as_secs_f64());
                 println!("    Response: {}", truncate_str(&result.response, 80));

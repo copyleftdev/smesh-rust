@@ -4,7 +4,7 @@
 //!
 //! Provides:
 //! - Unified LLM backend trait for multiple providers
-//! - Ollama client for local LLM inference
+//! - OpenRouter client (OpenAI-compatible gateway) for LLM inference
 //! - Claude/Anthropic client for cloud LLM
 //! - Streaming support for real-time responses
 //! - Constitutional AI steering via principles
@@ -16,7 +16,7 @@ pub mod backend;
 pub mod claude;
 pub mod constitutional;
 pub mod coordinator;
-pub mod ollama;
+pub mod openrouter;
 pub mod streaming;
 
 // Core backend types
@@ -49,7 +49,7 @@ pub use backend::{
 
 // LLM Backends
 pub use claude::{ClaudeClient, ClaudeConfig};
-pub use ollama::{OllamaClient, OllamaConfig};
+pub use openrouter::{OpenRouterClient, OpenRouterConfig};
 
 // Streaming utilities
 pub use streaming::{collect_text, parse_sse_event, parse_stop_reason};

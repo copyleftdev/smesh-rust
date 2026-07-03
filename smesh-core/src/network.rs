@@ -6,7 +6,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
-use crate::{Field, Node, NodeId, Signal};
+use crate::{Field, Node, NodeId};
 
 /// Network topology types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -283,41 +283,99 @@ impl Network {
         }
     }
 
-    /// Run one simulation tick
+    /// Run one simulation tick.
+    ///
+    /// Signals decay in the field and then *diffuse* one network hop outward.
+    /// Each signal carries the set of nodes it has already reached
+    /// ([`Signal::reached_nodes`]); every tick it spreads from that frontier to
+    /// the not-yet-reached neighbours of every reached node, gated by each
+    /// target's [`Node::should_relay`] policy and dampened by hypha strength.
+    /// A signal therefore takes N ticks to travel N hops, spreading through the
+    /// topology until it reaches its `radius` or decays away.
+    ///
+    /// The returned `propagated_signals` is the number of *new node arrivals*
+    /// this tick (how much wider every signal's reach grew combined).
     pub fn tick(&mut self, dt: f64) -> NetworkTickResult {
-        // Update field
+        // Decay and expire signals first.
         let expired = self.field.tick(dt);
 
-        // Propagate signals through hyphae
-        let mut propagated = 0;
-        let signals: Vec<Signal> = self.field.signals.values().cloned().collect();
+        let hashes: Vec<String> = self.field.signals.keys().cloned().collect();
+        let mut newly_reached = 0;
 
-        for signal in signals {
+        for hash in hashes {
+            // Snapshot so we can consult node relay policies without holding a
+            // borrow on the field while we later mutate it.
+            let signal = match self.field.signals.get(&hash) {
+                Some(s) => s.clone(),
+                None => continue,
+            };
+
+            // Seed the frontier at the origin the first time we see this
+            // signal. If the origin is not a node in this network (e.g. an
+            // anonymous emit with no matching node), there is nothing to
+            // diffuse from.
+            let mut reached: Vec<NodeId> = signal.reached_nodes.clone();
+            if reached.is_empty() {
+                if self.nodes.contains_key(&signal.origin_node_id) {
+                    reached.push(signal.origin_node_id.clone());
+                } else {
+                    continue;
+                }
+            }
+
+            // Expand exactly one BFS layer: not-yet-reached neighbours of any
+            // reached node whose target agrees to relay. We only expand while
+            // the signal still has hop budget left.
+            let mut frontier: Vec<NodeId> = Vec::new();
             if signal.hops < signal.radius {
-                // Get neighbors of origin node
-                if let Some(neighbors) = self.hyphae.get(&signal.origin_node_id) {
-                    for hypha in neighbors {
-                        if hypha.active {
-                            if let Some(target_node) = self.nodes.get(&hypha.to) {
-                                let (should_relay, dampening) =
-                                    target_node.should_relay(&signal, signal.radius - signal.hops);
+                let reached_set: HashSet<&str> = reached.iter().map(|s| s.as_str()).collect();
+                let remaining_hops = signal.radius - signal.hops;
 
+                for node_id in &reached {
+                    if let Some(hyphae) = self.hyphae.get(node_id) {
+                        for hypha in hyphae {
+                            if !hypha.active
+                                || reached_set.contains(hypha.to.as_str())
+                                || frontier.iter().any(|f| f == &hypha.to)
+                            {
+                                continue;
+                            }
+                            if let Some(target_node) = self.nodes.get(&hypha.to) {
+                                let (should_relay, _dampening) =
+                                    target_node.should_relay(&signal, remaining_hops);
                                 if should_relay {
-                                    let propagated_signal =
-                                        signal.propagate(dampening * hypha.strength);
-                                    self.field.emit_anonymous(propagated_signal);
-                                    propagated += 1;
+                                    frontier.push(hypha.to.clone());
                                 }
                             }
                         }
                     }
                 }
             }
+
+            // Commit the (seed + newly reached) frontier back onto the signal.
+            if let Some(s) = self.field.signals.get_mut(&hash) {
+                for node_id in reached.iter().chain(frontier.iter()) {
+                    s.mark_reached(node_id);
+                }
+                if !frontier.is_empty() {
+                    s.hops += 1;
+                }
+            }
+
+            // Record arrivals as node-level stats so spread is observable.
+            for target in &frontier {
+                if let Some(node) = self.nodes.get_mut(target) {
+                    node.stats.signals_relayed += 1;
+                    node.stats.signals_sensed += 1;
+                }
+            }
+
+            newly_reached += frontier.len();
         }
 
         NetworkTickResult {
             expired_signals: expired,
-            propagated_signals: propagated,
+            propagated_signals: newly_reached,
             active_signals: self.field.signals.len(),
         }
     }
@@ -399,6 +457,97 @@ mod tests {
         for connections in network.hyphae.values() {
             assert_eq!(connections.len(), 2);
         }
+    }
+
+    #[test]
+    fn test_signal_diffusion_spreads_multi_hop() {
+        use crate::{Signal, SignalType};
+
+        // A 6-node ring guarantees a node three hops from the origin.
+        let mut network = Network::with_topology(6, NetworkTopology::Ring);
+        let origin = network.nodes.keys().next().unwrap().clone();
+
+        // Strong signal + large radius so diffusion isn't cut short by decay
+        // or the hop limit before it can traverse the ring.
+        let signal = Signal::builder(SignalType::Data)
+            .payload(b"spread me".to_vec())
+            .intensity(1.0)
+            .confidence(1.0)
+            .ttl(10_000.0)
+            .radius(50)
+            .origin(&origin)
+            .build();
+        let hash = network.field.emit_anonymous(signal);
+
+        // Before any tick the signal has not diffused anywhere.
+        assert!(network
+            .field
+            .get_signal(&hash)
+            .unwrap()
+            .reached_nodes
+            .is_empty());
+
+        // Run until the signal covers the whole ring. Each active hypha relays
+        // with probability ~0.5/tick, so non-coverage within 300 ticks is
+        // astronomically unlikely (< 0.5^300). dt=0 keeps time-decay out of it.
+        let mut prev_reach = 0;
+        for _ in 0..300 {
+            network.tick(0.0);
+            let reach = network.field.get_signal(&hash).unwrap().reached_nodes.len();
+            assert!(reach >= prev_reach, "reach must be monotonically non-decreasing");
+            prev_reach = reach;
+            if reach == network.nodes.len() {
+                break;
+            }
+        }
+
+        let sig = network.field.get_signal(&hash).unwrap();
+        // The signal reached every node in the connected ring...
+        assert_eq!(sig.reached_nodes.len(), network.nodes.len());
+        assert!(sig.reached_nodes.contains(&origin));
+        // ...which is only possible via multi-hop spreading: the origin has two
+        // ring neighbours, so the far side is three hops away. The old code
+        // never advanced past the origin's direct neighbours (hop 1).
+        assert!(
+            sig.hops >= 3,
+            "far side of a 6-ring is 3 hops from origin, got {} hops",
+            sig.hops
+        );
+    }
+
+    #[test]
+    fn test_diffusion_does_not_collapse_into_reinforcement() {
+        use crate::{Signal, SignalType};
+
+        // Regression guard for the original bug: propagated signals reused the
+        // origin's content hash, so `emit_anonymous` merged them back into the
+        // source instead of spreading. That produced phantom "reinforcements"
+        // and zero real spread. Diffusion must grow reach, NOT reinforcement.
+        let mut network = Network::with_topology(5, NetworkTopology::Ring);
+        let origin = network.nodes.keys().next().unwrap().clone();
+
+        let signal = Signal::builder(SignalType::Data)
+            .payload(b"unique payload".to_vec())
+            .intensity(1.0)
+            .confidence(1.0)
+            .ttl(10_000.0)
+            .radius(50)
+            .origin(&origin)
+            .build();
+        let hash = network.field.emit_anonymous(signal);
+
+        for _ in 0..100 {
+            network.tick(0.0);
+        }
+
+        let sig = network.field.get_signal(&hash).unwrap();
+        // Reach grew (real diffusion)...
+        assert!(sig.reached_nodes.len() > 1);
+        // ...but the lone signal was never reinforced (nothing emitted the same
+        // content), and it stayed a single field entry rather than fanning out
+        // into collapsing copies.
+        assert_eq!(sig.reinforcement_count, 0);
+        assert_eq!(network.field.signals.len(), 1);
     }
 
     #[test]

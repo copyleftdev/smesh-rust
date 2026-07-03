@@ -14,7 +14,7 @@ SMESH is a **Rust workspace** implementing a decentralized coordination protocol
 smesh-rust/
 ├── smesh-core/      # Signals, nodes, fields, networks (core primitives)
 ├── smesh-runtime/   # QUIC P2P networking via Quinn
-├── smesh-agent/     # LLM backends (Ollama + Claude), Constitutional AI
+├── smesh-agent/     # LLM backends (OpenRouter + Claude), Constitutional AI
 └── smesh-cli/       # CLI tools, benchmarks, code review, threat analysis
 ```
 
@@ -34,7 +34,7 @@ smesh-rust/
 # Build (release optimized with LTO)
 cargo build --release
 
-# Run all tests (42 tests)
+# Run all tests (104 tests)
 cargo test --workspace
 
 # Run specific crate tests
@@ -58,7 +58,7 @@ cargo bench -p smesh-core
 ## CLI Commands
 
 ```bash
-# System status + Ollama connection check
+# System status + OpenRouter connection check
 cargo run --bin smesh -- status
 
 # Signal simulation (watch emergent behavior)
@@ -67,8 +67,8 @@ cargo run --bin smesh -- sim --nodes 50 --ticks 100
 # LLM agent coordination demo
 cargo run --bin smesh -- agents --demo
 
-# Compare Ollama vs Claude backends
-ANTHROPIC_API_KEY=... cargo run --bin smesh -- compare
+# Compare OpenRouter vs Claude backends
+cargo run --bin smesh -- compare
 
 # Multi-agent code review
 cargo run --bin smesh -- review --path ./some-repo --model qwen2.5-coder:7b
@@ -103,7 +103,7 @@ cargo run --bin smesh -- threat --path ./payloads --limit 20
 | Network topology | `smesh-core/src/network.rs` |
 | LLM backend trait | `smesh-agent/src/backend.rs` |
 | Claude client | `smesh-agent/src/claude.rs` |
-| Ollama client | `smesh-agent/src/ollama.rs` |
+| OpenRouter client | `smesh-agent/src/openrouter.rs` |
 | Constitutional AI | `smesh-agent/src/constitutional.rs` |
 | CLI entry point | `smesh-cli/src/main.rs` |
 
@@ -123,7 +123,7 @@ cargo run --bin smesh -- threat --path ./payloads --limit 20
 - **Crypto:** `sha2`, `rand`, `uuid`
 - **Networking:** `quinn` (QUIC), `rustls`
 - **Math:** `nalgebra`
-- **HTTP:** `reqwest` (for Ollama API)
+- **HTTP:** `reqwest` (for the OpenRouter / Claude APIs)
 - **CLI:** `clap` with derive
 
 ## Environment Variables
@@ -131,14 +131,17 @@ cargo run --bin smesh -- threat --path ./payloads --limit 20
 | Variable | Purpose |
 |----------|---------|
 | `ANTHROPIC_API_KEY` | Required for Claude backend |
-| `OLLAMA_HOST` | Ollama server URL (default: `http://localhost:11434`) |
+| `OPENROUTER_API_KEY` | Required for OpenRouter backend |
+| `OPENROUTER_BASE_URL` | OpenRouter API base (default: `https://openrouter.ai/api/v1`) |
+| `OPENROUTER_MODEL` | Default model slug (default: `google/gemini-2.5-flash-lite`) |
+| `OPENROUTER_ENV_FILE` | Optional path to a dotenv file for the above (falls back to `~/.creds/openrouter.env`) |
 | `RUST_LOG` | Tracing filter (e.g., `smesh=debug`) |
 
 ## Workflow Notes
 
 1. **Before committing:** Run `cargo fmt --all` and `cargo clippy --workspace`
 2. **After core changes:** Run benchmarks to verify no regression
-3. **For LLM features:** Test with both Ollama (local) and Claude (API)
+3. **For LLM features:** Test with both OpenRouter (Gemini) and Claude (API)
 4. **Branch naming:** `feature/`, `fix/`, `refactor/`
 
 ## Common Patterns
@@ -147,7 +150,7 @@ cargo run --bin smesh -- threat --path ./payloads --limit 20
 ```rust
 use smesh_core::{Signal, SignalType};
 
-let signal = Signal::builder(SignalType::Task)
+let signal = Signal::builder(SignalType::Coordination)
     .payload(b"task data".to_vec())
     .intensity(1.0)
     .ttl(60.0)
@@ -156,13 +159,12 @@ let signal = Signal::builder(SignalType::Task)
 
 ### Using LLM Backend
 ```rust
-use smesh_agent::{OllamaClient, LlmBackend, GenerateRequest};
+use smesh_agent::{OpenRouterClient, LlmBackend, GenerateRequest};
 
-let client = OllamaClient::new_default();
-let response = client.generate(GenerateRequest {
-    prompt: "Hello".into(),
-    ..Default::default()
-}).await?;
+// Credentials resolved from env or ~/.creds/openrouter.env
+let client = OpenRouterClient::from_env().expect("OPENROUTER_API_KEY not set");
+let response = client.generate(GenerateRequest::new("Hello")).await?;
+println!("{}", response.content);
 ```
 
 ## License

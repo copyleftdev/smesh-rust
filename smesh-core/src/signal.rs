@@ -97,6 +97,15 @@ pub struct Signal {
     /// Current hop count
     pub hops: u32,
 
+    /// Nodes this signal has diffused to through the network.
+    ///
+    /// This is the spatial frontier of the signal: it grows outward one
+    /// network hop per tick as the signal spreads. An empty set means the
+    /// signal has not yet entered network diffusion and is treated as
+    /// *ambient* (sensable everywhere) for field-only use.
+    #[serde(default)]
+    pub reached_nodes: Vec<String>,
+
     /// Protocol checksum (carries build DNA for attribution)
     #[serde(default)]
     pub protocol_checksum: String,
@@ -159,6 +168,21 @@ impl Signal {
             // Boost confidence with diminishing returns
             let boost = 0.1 / (1.0 + self.reinforcement_count as f64 * 0.5);
             self.confidence = (self.confidence + boost).min(1.0);
+        }
+    }
+
+    /// Whether this signal has diffused to the given node.
+    ///
+    /// A signal that has not yet entered diffusion (empty reached set) is
+    /// ambient and considered to have reached every node.
+    pub fn has_reached(&self, node_id: &str) -> bool {
+        self.reached_nodes.is_empty() || self.reached_nodes.iter().any(|n| n == node_id)
+    }
+
+    /// Record that the signal has diffused to a node (idempotent).
+    pub fn mark_reached(&mut self, node_id: &str) {
+        if !self.reached_nodes.iter().any(|n| n == node_id) {
+            self.reached_nodes.push(node_id.to_string());
         }
     }
 
@@ -327,6 +351,7 @@ impl SignalBuilder {
             reinforcement_count: 0,
             reinforced_by: Vec::new(),
             hops: 0,
+            reached_nodes: Vec::new(),
             protocol_checksum,
         }
     }
