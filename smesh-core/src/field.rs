@@ -103,11 +103,16 @@ impl Field {
         expired.len()
     }
 
-    /// Sense signals at a node's location (all signals above threshold)
+    /// Sense signals at a node's location.
+    ///
+    /// A signal is sensed only if it is above the node's sensing threshold
+    /// *and* has diffused to this node. Signals that have not yet entered
+    /// network diffusion are ambient and sensable everywhere (see
+    /// [`Signal::has_reached`]).
     pub fn sense(&self, node: &Node) -> Vec<&Signal> {
         self.signals
             .values()
-            .filter(|s| node.can_sense(s))
+            .filter(|s| s.has_reached(&node.id) && node.can_sense(s))
             .collect()
     }
 
@@ -228,5 +233,19 @@ mod tests {
 
         let signal = field.signals.values().next().unwrap();
         assert_eq!(signal.reinforcement_count, 1);
+    }
+
+    #[test]
+    fn test_undiffused_signal_is_ambient() {
+        // A signal that has never been through network diffusion has an empty
+        // reached set and is sensable everywhere (backward-compatible with
+        // field-only use, where there is no network topology).
+        let mut field = Field::new();
+        let node = Node::new();
+
+        let signal = Signal::builder(SignalType::Data).intensity(1.0).build();
+        field.emit_anonymous(signal);
+
+        assert_eq!(field.sense(&node).len(), 1);
     }
 }
