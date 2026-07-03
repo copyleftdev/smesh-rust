@@ -15,6 +15,7 @@ use smesh_runtime::{RuntimeConfig, SmeshRuntime};
 
 mod owasp;
 mod review;
+mod showcase;
 mod swarm;
 mod viz;
 
@@ -128,6 +129,13 @@ enum Commands {
     Viz {
         /// Port to serve on
         #[arg(short, long, default_value = "8080")]
+        port: u16,
+    },
+
+    /// Serve the two-tab kinetic showcase (OWASP benchmark + live mesh)
+    Showcase {
+        /// Port to serve on
+        #[arg(short, long, default_value = "8090")]
         port: u16,
     },
 
@@ -286,6 +294,10 @@ async fn main() -> Result<()> {
         } => cmd_code(coders, consensus, &format).await,
         Commands::Viz { port } => {
             viz::serve(port)?;
+            Ok(())
+        }
+        Commands::Showcase { port } => {
+            showcase::serve(port)?;
             Ok(())
         }
         Commands::Redteam { target } => cmd_redteam(&target).await,
