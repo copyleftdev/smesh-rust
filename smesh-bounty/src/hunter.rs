@@ -2,7 +2,7 @@
 //!
 //! This is the heart of the integration. Each BountyHunter is:
 //! - A SMESH Node (emits, senses, reinforces signals)
-//! - An LLM client (thinks via Claude/Ollama)
+//! - An LLM client (thinks via Claude/OpenRouter)
 //! - A ToolExecutor (acts on the filesystem, network, etc.)
 //!
 //! The agentic loop:

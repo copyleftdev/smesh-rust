@@ -42,8 +42,8 @@ pub enum LlmError {
 /// LLM provider type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LlmProvider {
-    /// Local Ollama instance
-    Ollama,
+    /// OpenRouter (OpenAI-compatible gateway)
+    OpenRouter,
     /// Anthropic Claude API
     Claude,
     /// OpenAI API (future)
@@ -53,7 +53,7 @@ pub enum LlmProvider {
 impl std::fmt::Display for LlmProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LlmProvider::Ollama => write!(f, "Ollama"),
+            LlmProvider::OpenRouter => write!(f, "OpenRouter"),
             LlmProvider::Claude => write!(f, "Claude"),
             LlmProvider::OpenAI => write!(f, "OpenAI"),
         }

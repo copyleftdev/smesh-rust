@@ -1,7 +1,7 @@
 //! LLM-powered agent for SMESH
 //!
 //! Provides generic backend support for LLM agents, allowing use of
-//! Ollama, Claude, or other LLM backends.
+//! OpenRouter, Claude, or other LLM backends.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tracing::{debug, info};
 
 use crate::backend::{LlmBackend, LlmError};
-use crate::ollama::{OllamaClient, OllamaConfig};
+use crate::openrouter::{OpenRouterClient, OpenRouterConfig};
 use smesh_core::{Node, Signal};
 
 /// Agent roles that determine skills and behavior
@@ -145,9 +145,9 @@ pub struct AgentConfig {
     pub max_concurrent_tasks: usize,
     /// Minimum affinity to claim a task
     pub affinity_threshold: f64,
-    /// Ollama configuration (for backward compatibility)
+    /// OpenRouter configuration (used when the agent builds its own backend)
     #[serde(default)]
-    pub ollama: Option<OllamaConfig>,
+    pub openrouter: Option<OpenRouterConfig>,
 }
 
 impl Default for AgentConfig {
@@ -157,7 +157,7 @@ impl Default for AgentConfig {
             role: AgentRole::General,
             max_concurrent_tasks: 3,
             affinity_threshold: 0.5,
-            ollama: Some(OllamaConfig::default()),
+            openrouter: Some(OpenRouterConfig::default()),
         }
     }
 }
@@ -216,6 +216,11 @@ pub struct LlmAgent {
     pub current_tasks: Vec<AgentTask>,
     /// Task queue (claimed but not started)
     pub task_queue: Vec<String>,
+    /// Tasks this agent has yielded to a stronger claimant and will not
+    /// re-claim. This makes decentralized back-off *stable*: once an agent
+    /// concedes a task to a higher-affinity peer it stays conceded, so the
+    /// field settles instead of oscillating between claim and back-off.
+    pub conceded: Vec<String>,
     /// Completed task results
     pub results: Vec<AgentTask>,
     /// Metrics
@@ -233,21 +238,30 @@ impl LlmAgent {
             backend,
             current_tasks: Vec::new(),
             task_queue: Vec::new(),
+            conceded: Vec::new(),
             results: Vec::new(),
             llm_calls: 0,
         }
     }
 
-    /// Create a new LLM agent with Ollama backend (backward compatibility)
-    pub fn with_ollama(config: AgentConfig) -> Self {
-        let ollama_config = config.ollama.as_ref().cloned().unwrap_or_default();
-        let backend = Arc::new(OllamaClient::new(ollama_config));
+    /// Create a new LLM agent with an OpenRouter backend.
+    ///
+    /// Uses the config's `openrouter` settings if present, otherwise resolves
+    /// credentials from the environment / credentials file.
+    pub fn with_openrouter(config: AgentConfig) -> Self {
+        let or_config = config
+            .openrouter
+            .as_ref()
+            .cloned()
+            .or_else(OpenRouterConfig::from_env)
+            .unwrap_or_default();
+        let backend = Arc::new(OpenRouterClient::new(or_config));
         Self::new(config, backend)
     }
 
-    /// Create a new LLM agent with a specific Ollama configuration
-    pub fn with_ollama_config(config: AgentConfig, ollama_config: OllamaConfig) -> Self {
-        let backend = Arc::new(OllamaClient::new(ollama_config));
+    /// Create a new LLM agent with a specific OpenRouter configuration.
+    pub fn with_openrouter_config(config: AgentConfig, or_config: OpenRouterConfig) -> Self {
+        let backend = Arc::new(OpenRouterClient::new(or_config));
         Self::new(config, backend)
     }
 
@@ -349,8 +363,11 @@ impl LlmAgent {
                 let task_type = task_type_str.parse::<TaskType>().ok()?;
                 let priority = payload.get("priority")?.as_f64().unwrap_or(0.5);
 
-                // Skip if already in queue
-                if self.task_queue.contains(&task_id.to_string()) {
+                // Skip if already in queue, or if we already yielded this task
+                // to a stronger claimant (stable back-off).
+                if self.task_queue.contains(&task_id.to_string())
+                    || self.conceded.iter().any(|t| t == task_id)
+                {
                     return None;
                 }
 
@@ -379,6 +396,10 @@ impl LlmAgent {
 
                     if their_affinity > our_affinity + 0.1 {
                         self.task_queue.retain(|id| id != task_id);
+                        // Remember the concession so we don't re-claim next round.
+                        if !self.conceded.iter().any(|t| t == task_id) {
+                            self.conceded.push(task_id.to_string());
+                        }
                         return Some(AgentAction::BackOff {
                             task_id: task_id.to_string(),
                         });
@@ -415,7 +436,7 @@ mod tests {
             ..Default::default()
         };
 
-        let agent = LlmAgent::with_ollama(config);
+        let agent = LlmAgent::with_openrouter(config);
 
         assert_eq!(agent.name(), "TestAgent");
         assert!(agent.skill(TaskType::CodeWrite) > 0.9);
@@ -431,7 +452,7 @@ mod tests {
             ..Default::default()
         };
 
-        let agent = LlmAgent::with_ollama(config);
+        let agent = LlmAgent::with_openrouter(config);
 
         // Coder should claim code tasks (skill 0.95 > 0.6)
         assert!(agent.should_claim(TaskType::CodeWrite, 0.5).is_some());
