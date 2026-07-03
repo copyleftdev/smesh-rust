@@ -63,5 +63,6 @@ pub use constitutional::{
 // Agent system
 pub use agent::{AgentConfig, AgentRole, AgentTask, LlmAgent, TaskType};
 pub use coordinator::{
-    AgentCoordinator, BackendFactory, CoordinatorConfig, CoordinatorResult, TaskDefinition,
+    AgentCoordinator, AgentInfo, BackendFactory, CoordinatorConfig, CoordinatorResult, RoundTrace,
+    TaskDefinition,
 };

@@ -1,0 +1,573 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='5' fill='%234d8fec'/></svg>">
+<title>SMESH — Live Mesh Showcase</title>
+<style>
+  :root{
+    --bg:#06060c; --surface:#0d0d16; --card:#13131f; --border:#1e1e32;
+    --text:#e4e4ed; --text2:#7a7a96; --dim:#4a4a64;
+    --accent:#4d8fec; --glow:rgba(77,143,236,.15);
+    --warm:#e8a030; --green:#34d399; --red:#f87171; --purple:#c792ea; --cyan:#38bdf8;
+    --mono:'SF Mono','Cascadia Code','JetBrains Mono','Consolas',monospace;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+    --ease:cubic-bezier(.16,1,.3,1);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{background:var(--bg);color:var(--text);font-family:var(--sans);overflow:hidden}
+  #app{display:flex;flex-direction:column;height:100vh}
+
+  header{display:flex;align-items:center;gap:20px;padding:12px 20px;border-bottom:1px solid var(--border);background:var(--surface);flex:none}
+  .brand{font-weight:700;letter-spacing:.14em;font-size:14px}
+  .brand .dot{color:var(--accent)}
+  .tabs{display:flex;gap:4px}
+  .tab{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--text2);background:transparent;border:1px solid transparent;padding:7px 14px;border-radius:7px;cursor:pointer;transition:all .2s var(--ease)}
+  .tab:hover{color:var(--text);background:var(--card)}
+  .tab.active{color:var(--accent);border-color:var(--border);background:var(--card);box-shadow:0 0 0 1px var(--glow)}
+  .spacer{flex:1}
+  .hint{font-family:var(--mono);font-size:10px;color:var(--dim)}
+
+  main{flex:1;position:relative;overflow:hidden}
+  .panel{position:absolute;inset:0;opacity:0;pointer-events:none;transition:opacity .3s var(--ease)}
+  .panel.active{opacity:1;pointer-events:auto}
+
+  /* ── Live Mesh tab ── */
+  #mesh{position:absolute;inset:0;width:100%;height:100%;display:block}
+  .controls{position:absolute;top:16px;left:16px;right:16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;z-index:5}
+  .field{display:flex;align-items:center;background:rgba(13,13,22,.85);backdrop-filter:blur(8px);border:1px solid var(--border);border-radius:9px;overflow:hidden}
+  .field input[type=text]{background:transparent;border:none;color:var(--text);font-family:var(--mono);font-size:13px;padding:10px 12px;width:min(46vw,420px);outline:none}
+  .field input::placeholder{color:var(--dim)}
+  .seg{display:flex;background:rgba(13,13,22,.85);backdrop-filter:blur(8px);border:1px solid var(--border);border-radius:9px;padding:3px}
+  .seg button{font-family:var(--mono);font-size:11px;letter-spacing:.04em;color:var(--text2);background:transparent;border:none;padding:7px 13px;border-radius:6px;cursor:pointer;transition:all .2s var(--ease)}
+  .seg button.on{color:#06060c;background:var(--accent);font-weight:600}
+  .run{font-family:var(--mono);font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#06060c;background:var(--accent);border:none;padding:10px 18px;border-radius:9px;cursor:pointer;font-weight:700;transition:transform .15s var(--ease),box-shadow .2s}
+  .run:hover{transform:translateY(-1px);box-shadow:0 6px 20px var(--glow)}
+  .run:disabled{opacity:.5;cursor:default;transform:none;box-shadow:none}
+  select{font-family:var(--mono);font-size:11px;color:var(--text2);background:rgba(13,13,22,.85);border:1px solid var(--border);border-radius:9px;padding:9px 10px;cursor:pointer;outline:none}
+  .diffuse-only{display:flex;gap:10px}
+
+  .hud{position:absolute;left:16px;bottom:16px;display:flex;gap:14px;flex-wrap:wrap;z-index:5}
+  .stat{background:rgba(13,13,22,.8);backdrop-filter:blur(8px);border:1px solid var(--border);border-radius:9px;padding:8px 14px;min-width:78px}
+  .stat .k{font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+  .stat .v{font-family:var(--mono);font-size:19px;font-weight:700;color:var(--text);line-height:1.2}
+  .stat .v small{font-size:11px;color:var(--text2);font-weight:400}
+
+  .legend{position:absolute;right:16px;bottom:16px;background:rgba(13,13,22,.8);backdrop-filter:blur(8px);border:1px solid var(--border);border-radius:9px;padding:10px 14px;font-family:var(--mono);font-size:10px;color:var(--text2);z-index:5;max-width:230px}
+  .legend b{color:var(--text);display:block;margin-bottom:5px;font-size:9px;letter-spacing:.1em;text-transform:uppercase}
+  .legend .row{display:flex;align-items:center;gap:7px;margin:3px 0}
+  .legend .sw{width:10px;height:10px;border-radius:50%;flex:none}
+
+  .timeline{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);display:flex;align-items:center;gap:12px;background:rgba(13,13,22,.85);backdrop-filter:blur(8px);border:1px solid var(--border);border-radius:11px;padding:8px 14px;z-index:6}
+  .timeline button{background:transparent;border:none;color:var(--text);cursor:pointer;font-size:15px;width:24px}
+  .timeline input[type=range]{width:min(38vw,340px);accent-color:var(--accent)}
+  .timeline .lbl{font-family:var(--mono);font-size:10px;color:var(--text2);min-width:96px;text-align:right}
+
+  .toast{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-family:var(--mono);font-size:13px;color:var(--text2);text-align:center;pointer-events:none;z-index:4}
+
+  /* ── Benchmark tab ── */
+  #tab-bench{overflow:auto;padding:28px}
+  .bwrap{max-width:1060px;margin:0 auto}
+  .bhead{font-size:20px;font-weight:700;margin-bottom:4px}
+  .bmeta{font-family:var(--mono);font-size:12px;color:var(--text2);margin-bottom:22px}
+  .bgrid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  @media (max-width:860px){.bgrid{grid-template-columns:1fr}}
+  .bcard{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px}
+  .bcard .h{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--text2);margin-bottom:12px}
+  .hero{font-size:46px;font-weight:800;line-height:1}
+  .hero.g{color:var(--green)} .hero.b{color:var(--red)}
+  .sub{color:var(--text2);font-size:13px;margin-top:8px}
+  table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12px;margin-top:20px}
+  th,td{padding:7px 8px;text-align:right;border-bottom:1px solid var(--border)}
+  th:first-child,td:first-child{text-align:left}
+  th{color:var(--text2);font-size:10px;letter-spacing:.06em;text-transform:uppercase}
+  tr.total td{font-weight:700;border-top:2px solid var(--border)}
+  .yg{color:var(--green)} .yb{color:var(--red)}
+  .bcard svg{width:100%;height:auto}
+  .empty{font-family:var(--mono);font-size:13px;color:var(--text2);text-align:center;padding:60px 0}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="brand">SMESH<span class="dot">·</span>MESH</div>
+    <div class="tabs">
+      <button class="tab active" data-tab="live">◈ Live Mesh</button>
+      <button class="tab" data-tab="bench">▚ OWASP Benchmark</button>
+    </div>
+    <div class="spacer"></div>
+    <div class="hint">real engine · signals decay, diffuse &amp; reinforce</div>
+  </header>
+
+  <main>
+    <!-- LIVE MESH -->
+    <section id="tab-live" class="panel active">
+      <canvas id="mesh"></canvas>
+      <div class="controls">
+        <div class="seg" id="mode-seg">
+          <button class="on" data-mode="diffuse">◇ Diffuse</button>
+          <button data-mode="consensus">◈ Consensus</button>
+        </div>
+        <div class="field">
+          <input id="txt" type="text" placeholder="type a signal to inject into the mesh…" value="need code review on the auth module">
+        </div>
+        <div class="diffuse-only" id="diffuse-ctl">
+          <select id="topo">
+            <option value="small_world">small-world</option>
+            <option value="scale_free">scale-free</option>
+            <option value="ring">ring</option>
+            <option value="mesh">full mesh</option>
+            <option value="grid">grid</option>
+            <option value="random">random</option>
+          </select>
+          <select id="nodes">
+            <option value="32">32 nodes</option>
+            <option value="48" selected>48 nodes</option>
+            <option value="80">80 nodes</option>
+            <option value="120">120 nodes</option>
+          </select>
+        </div>
+        <button class="run" id="run">Inject ▸</button>
+      </div>
+
+      <div class="hud" id="hud"></div>
+      <div class="legend" id="legend"></div>
+
+      <div class="timeline" id="tl" style="display:none">
+        <button id="playpause">⏸</button>
+        <input id="scrub" type="range" min="0" max="100" value="0">
+        <span class="lbl" id="tllbl">tick 0</span>
+      </div>
+      <div class="toast" id="toast"></div>
+    </section>
+
+    <!-- BENCHMARK -->
+    <section id="tab-bench" class="panel">
+      <div class="bwrap" id="bench-content">
+        <div class="empty" id="bench-empty">Loading OWASP scorecard…</div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+
+// ─────────────────────────────────────────── tab switching
+document.querySelectorAll('.tab').forEach(t=>{
+  t.onclick=()=>{
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');
+    const which=t.dataset.tab;
+    $('#tab-live').classList.toggle('active',which==='live');
+    $('#tab-bench').classList.toggle('active',which==='bench');
+    if(which==='bench') loadBench();
+  };
+});
+
+// ─────────────────────────────────────────── canvas setup
+const cv=$('#mesh'), cx=cv.getContext('2d');
+let W=0,H=0,DPR=Math.min(devicePixelRatio||1,2);
+function resize(){
+  W=cv.clientWidth; H=cv.clientHeight;
+  cv.width=W*DPR; cv.height=H*DPR; cx.setTransform(DPR,0,0,DPR,0,0);
+}
+new ResizeObserver(resize).observe(cv); resize();
+
+// starfield
+const stars=Array.from({length:120},()=>({x:Math.random(),y:Math.random(),r:Math.random()*1.1+.2,a:Math.random()*.4+.1,tw:Math.random()*7}));
+
+// ─────────────────────────────────────────── state
+let MODE='diffuse';
+let G=null;          // {ids, edges, pos:{id->{x,y}}}
+let TRACE=null;      // diffuse: frames[]; consensus: rounds[]
+let play=true, head=0, frames=0, busy=false;
+let particles=[];    // traveling pulses
+let edgeGlow={};     // edge key -> glow
+
+// ─────────────────────────────────────────── force layout
+function layout(ids, edges){
+  const n=ids.length, pos={};
+  const pad=70, cxp=W/2, cyp=H/2, R=Math.min(W,H)/2-pad;
+  ids.forEach((id,i)=>{const a=i/n*Math.PI*2; pos[id]={x:cxp+Math.cos(a)*R*.7,y:cyp+Math.sin(a)*R*.7,vx:0,vy:0};});
+  const idx={}; ids.forEach((id,i)=>idx[id]=i);
+  const E=edges.map(e=>[idx[e[0]],idx[e[1]]]).filter(e=>e[0]!=null&&e[1]!=null);
+  const P=ids.map(id=>pos[id]);
+  const k=Math.sqrt((W*H*.55)/Math.max(n,1));
+  let temp=W/9;
+  for(let it=0;it<260;it++){
+    for(let i=0;i<n;i++){P[i].vx=0;P[i].vy=0;}
+    for(let i=0;i<n;i++)for(let j=i+1;j<n;j++){
+      let dx=P[i].x-P[j].x,dy=P[i].y-P[j].y,d=Math.hypot(dx,dy)||.01;
+      const f=k*k/d; const ux=dx/d,uy=dy/d;
+      P[i].vx+=ux*f;P[i].vy+=uy*f;P[j].vx-=ux*f;P[j].vy-=uy*f;
+    }
+    for(const [a,b] of E){
+      let dx=P[a].x-P[b].x,dy=P[a].y-P[b].y,d=Math.hypot(dx,dy)||.01;
+      const f=d*d/k; const ux=dx/d,uy=dy/d;
+      P[a].vx-=ux*f;P[a].vy-=uy*f;P[b].vx+=ux*f;P[b].vy+=uy*f;
+    }
+    for(let i=0;i<n;i++){
+      let d=Math.hypot(P[i].vx,P[i].vy)||.01;
+      P[i].x+=P[i].vx/d*Math.min(d,temp);
+      P[i].y+=P[i].vy/d*Math.min(d,temp);
+    }
+    temp*=.975;
+  }
+  // Scale-and-center the whole graph to fit the viewport (no border sticking).
+  let minx=1e9,miny=1e9,maxx=-1e9,maxy=-1e9;
+  for(const p of P){minx=Math.min(minx,p.x);miny=Math.min(miny,p.y);maxx=Math.max(maxx,p.x);maxy=Math.max(maxy,p.y);}
+  const gw=(maxx-minx)||1, gh=(maxy-miny)||1;
+  const topPad=118, botPad=96, sidePad=72;
+  const s=Math.min((W-sidePad*2)/gw,(H-topPad-botPad)/gh);
+  const offx=(W-gw*s)/2-minx*s, offy=topPad+(H-topPad-botPad-gh*s)/2-miny*s;
+  for(let i=0;i<n;i++){P[i].x=P[i].x*s+offx;P[i].y=P[i].y*s+offy;}
+  return pos;
+}
+
+const ekey=(a,b)=>a<b?a+'|'+b:b+'|'+a;
+
+// ─────────────────────────────────────────── run: diffuse
+async function runDiffuse(){
+  const text=$('#txt').value||'signal';
+  const body={text,topology:$('#topo').value,nodes:+$('#nodes').value,ticks:46,seeds:1};
+  const r=await fetch('/api/diffuse',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const d=await r.json();
+  G={ids:d.nodes,edges:d.edges,origins:d.origins,pos:layout(d.nodes,d.edges)};
+  TRACE=d.frames; frames=d.frames.length; head=0; play=true; particles=[]; edgeGlow={};
+  // adjacency for pulse routing
+  G.adj={}; d.nodes.forEach(id=>G.adj[id]=[]);
+  d.edges.forEach(([a,b])=>{G.adj[a].push(b);G.adj[b].push(a);});
+  G.prevReached=new Set(d.origins);
+  showTimeline(true);
+}
+
+// ─────────────────────────────────────────── run: consensus
+async function runConsensus(){
+  const text=$('#txt').value||'';
+  const r=await fetch('/api/consensus',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
+  const d=await r.json();
+  // Build a small graph: agents around a central task node.
+  const task=d.tasks[0];
+  const ids=d.agents.map(a=>a.id).concat(['__task__']);
+  const edges=d.agents.map(a=>[a.id,'__task__']);
+  const pos={};
+  const cxp=W/2,cyp=H/2,R=Math.min(W,H)/3.4;
+  d.agents.forEach((a,i)=>{const ang=-Math.PI/2+i/d.agents.length*Math.PI*2;pos[a.id]={x:cxp+Math.cos(ang)*R,y:cyp+Math.sin(ang)*R};});
+  pos['__task__']={x:cxp,y:cyp};
+  G={ids,edges,pos,agents:d.agents,task,winners:d.winners,adj:{}};
+  ids.forEach(id=>G.adj[id]=[]); edges.forEach(([a,b])=>{G.adj[a].push(b);G.adj[b].push(a);});
+  TRACE=d.rounds; frames=Math.max(d.rounds.length,1); head=0; play=true; particles=[]; edgeGlow={};
+  G.roleColor={}; d.agents.forEach(a=>G.roleColor[a.id]=roleColor(a.role));
+  showTimeline(true);
+}
+
+function roleColor(role){
+  return role==='Coder'?'#4d8fec':role==='Reviewer'?'#c792ea':role==='Analyst'?'#34d399':'#e8a030';
+}
+
+// ─────────────────────────────────────────── run button
+async function run(){
+  if(busy) return; busy=true; $('#run').disabled=true; toast('running mesh…');
+  try{ MODE==='diffuse'?await runDiffuse():await runConsensus(); toast(''); }
+  catch(e){ toast('engine error: '+e.message); }
+  busy=false; $('#run').disabled=false;
+}
+$('#run').onclick=run;
+$('#txt').addEventListener('keydown',e=>{if(e.key==='Enter')run();});
+
+// mode toggle
+$('#mode-seg').querySelectorAll('button').forEach(b=>{
+  b.onclick=()=>{
+    MODE=b.dataset.mode;
+    $('#mode-seg').querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
+    $('#diffuse-ctl').style.display=MODE==='diffuse'?'flex':'none';
+    TRACE=null; showTimeline(false); renderLegend();
+  };
+});
+
+// ─────────────────────────────────────────── timeline
+function showTimeline(on){
+  $('#tl').style.display=on?'flex':'none';
+  const s=$('#scrub'); s.max=Math.max(frames-1,1);
+}
+$('#playpause').onclick=()=>{play=!play; $('#playpause').textContent=play?'⏸':'▶';};
+$('#scrub').oninput=e=>{head=+e.target.value; play=false; $('#playpause').textContent='▶';};
+
+function toast(m){ $('#toast').textContent=m; }
+
+// ─────────────────────────────────────────── diffuse frame → node levels
+function nodeLevels(fi){
+  // level per node = max intensity of any signal that has reached it
+  const lv={};
+  const fr=TRACE[Math.min(fi,TRACE.length-1)];
+  for(const s of fr.signals){
+    for(const nid of s.reached){
+      lv[nid]=Math.max(lv[nid]||0, s.intensity);
+    }
+  }
+  return {lv,fr};
+}
+
+// spawn pulses along edges from newly-reached nodes
+function spawnDiffusePulses(fi){
+  const fr=TRACE[Math.min(fi,TRACE.length-1)];
+  const reached=new Set();
+  for(const s of fr.signals) for(const nid of s.reached) reached.add(nid);
+  for(const nid of reached){
+    if(G.prevReached.has(nid)) continue;
+    // newly reached: pulse from a reached neighbour to this node
+    const from=(G.adj[nid]||[]).find(nb=>G.prevReached.has(nb));
+    const a=from?G.pos[from]:G.pos[nid], b=G.pos[nid];
+    if(a&&b){ particles.push(mkPulse(a,b,'#4d8fec',3.2)); edgeGlow[ekey(from||nid,nid)]=1; }
+  }
+  G.prevReached=reached;
+}
+
+function mkPulse(a,b,col,sz){
+  const mx=(a.x+b.x)/2, my=(a.y+b.y)/2-Math.hypot(b.x-a.x,b.y-a.y)*.12;
+  return {ox:a.x,oy:a.y,mx,my,tx:b.x,ty:b.y,x:a.x,y:a.y,t:0,spd:.03+Math.random()*.02,col,sz};
+}
+function bz(o,m,t,u){const it=1-u;return it*it*o+2*it*u*m+u*u*t;}
+
+// ─────────────────────────────────────────── consensus round application
+let lastRound=-1;
+function applyConsensusRound(ri){
+  if(ri===lastRound) return; lastRound=ri;
+  const r=TRACE[Math.min(ri,TRACE.length-1)]; if(!r) return;
+  for(const c of (r.claims||[])){
+    const a=G.pos[c.agent], b=G.pos['__task__'];
+    if(a&&b){ particles.push(mkPulse(a,b,G.roleColor[c.agent]||'#4d8fec',3.6)); edgeGlow[ekey(c.agent,'__task__')]=1; }
+  }
+  for(const bo of (r.backoffs||[])){
+    const a=G.pos[bo.agent], b=G.pos['__task__'];
+    if(a&&b){ particles.push(mkPulse(b,a,'#f87171',2.4)); } // retreat pulse
+  }
+}
+function isWinner(id){ return G.winners && G.winners.some(w=>w.agent===id); }
+
+// ─────────────────────────────────────────── main draw loop
+let t0=performance.now();
+function frame(now){
+  requestAnimationFrame(frame);
+  const dt=Math.min((now-t0)/1000,.05); t0=now;
+  cx.clearRect(0,0,W,H);
+
+  // stars
+  for(const s of stars){ s.tw+=.02; cx.beginPath(); cx.arc(s.x*W,s.y*H,s.r,0,7); cx.fillStyle=`rgba(150,170,210,${s.a*(.6+Math.sin(s.tw)*.4)})`; cx.fill(); }
+
+  if(!G||!TRACE){ drawIdle(); return; }
+
+  // advance playhead (diffuse loops so the spread stays visible; consensus holds on the winner)
+  if(play){
+    if(MODE==='diffuse'){
+      head+=dt*8;
+      if(head>frames-1+10){ head=0; particles=[]; edgeGlow={}; lastRound=-1; if(G) G.prevReached=new Set(G.origins); }
+    }else{
+      head+=dt*2.2; if(head>frames-1) head=frames-1;
+    }
+    $('#scrub').value=Math.min(Math.floor(head),frames-1);
+  }
+  const fi=Math.min(Math.floor(head),frames-1);
+
+  // edges
+  for(const [a,b] of G.edges){
+    const pa=G.pos[a],pb=G.pos[b]; if(!pa||!pb) continue;
+    const g=edgeGlow[ekey(a,b)]||0;
+    cx.beginPath(); cx.moveTo(pa.x,pa.y);
+    const my=(pa.y+pb.y)/2-Math.hypot(pb.x-pa.x,pb.y-pa.y)*.12;
+    cx.quadraticCurveTo((pa.x+pb.x)/2,my,pb.x,pb.y);
+    cx.strokeStyle=`rgba(77,143,236,${.05+g*.35})`; cx.lineWidth=g>.1?1.4:.6;
+    if(g>.1){cx.shadowColor='#4d8fec';cx.shadowBlur=6*g;}
+    cx.stroke(); cx.shadowBlur=0;
+    edgeGlow[ekey(a,b)]=g*.94;
+  }
+
+  if(MODE==='diffuse'){ drawDiffuse(fi); } else { drawConsensus(fi); }
+
+  // particles (pulses)
+  for(let i=particles.length-1;i>=0;i--){
+    const p=particles[i]; p.t+=p.spd; if(p.t>=1){particles.splice(i,1);continue;}
+    const nx=bz(p.ox,p.mx,p.tx,p.t), ny=bz(p.oy,p.my,p.ty,p.t);
+    const al=p.t<.75?1:(1-p.t)*4;
+    cx.beginPath(); cx.moveTo(p.x,p.y); cx.lineTo(nx,ny);
+    cx.strokeStyle=p.col; cx.lineWidth=p.sz*.7; cx.globalAlpha=al*.4;
+    cx.shadowColor=p.col; cx.shadowBlur=8; cx.stroke(); cx.shadowBlur=0;
+    cx.beginPath(); cx.arc(nx,ny,p.sz,0,7); cx.fillStyle=p.col; cx.globalAlpha=al;
+    cx.shadowColor=p.col; cx.shadowBlur=12; cx.fill(); cx.shadowBlur=0; cx.globalAlpha=1;
+    p.x=nx; p.y=ny;
+  }
+  updateHUD(fi);
+  $('#tllbl').textContent=(MODE==='diffuse'?'tick ':'round ')+fi+' / '+(frames-1);
+}
+
+const fnum=performance.now();
+function drawDiffuse(fi){
+  spawnDiffusePulses(fi);
+  const {lv}=nodeLevels(fi);
+  const now=performance.now()*.004;
+  for(let i=0;i<G.ids.length;i++){
+    const id=G.ids[i], p=G.pos[id]; if(!p) continue;
+    const l=lv[id]||0;                 // 0..1 intensity
+    const reached=l>0.001;
+    const isOrigin=G.origins.includes(id);
+    // color channel: deep blue (weak) → accent → bright cyan (strong signal)
+    const col=!reached?[42,42,60]
+      :l<.5?lerpCol([64,86,138],[77,143,236],l/.5)
+      :lerpCol([77,143,236],[120,214,255],(l-.5)/.5);
+    const base=reached?3.4+l*7:2.6;
+    const pulse=reached?Math.sin(now*2+i)*l*1.6:0;
+    const rr=base+pulse+(isOrigin?3:0);
+    if(reached){ cx.shadowColor=`rgb(${col[0]},${col[1]},${col[2]})`; cx.shadowBlur=8+l*20; }
+    cx.beginPath(); cx.arc(p.x,p.y,rr,0,7);
+    cx.fillStyle=`rgb(${col[0]},${col[1]},${col[2]})`; cx.globalAlpha=reached?.95:.5; cx.fill();
+    cx.globalAlpha=1; cx.shadowBlur=0;
+    if(isOrigin){ cx.beginPath(); cx.arc(p.x,p.y,rr+4,0,7); cx.strokeStyle='rgba(232,160,48,.6)'; cx.lineWidth=1.2; cx.stroke(); }
+  }
+}
+
+function drawConsensus(fi){
+  applyConsensusRound(fi);
+  const now=performance.now()*.004;
+  // task node (center)
+  const tp=G.pos['__task__'];
+  cx.beginPath(); cx.arc(tp.x,tp.y,16+Math.sin(now*1.5)*2,0,7);
+  cx.fillStyle='#13131f'; cx.strokeStyle='var(--accent)'; cx.strokeStyle='#4d8fec'; cx.lineWidth=2;
+  cx.shadowColor='#4d8fec'; cx.shadowBlur=14; cx.fill(); cx.stroke(); cx.shadowBlur=0;
+  cx.fillStyle='#e4e4ed'; cx.font='600 10px var(--mono),monospace'; cx.textAlign='center';
+  cx.fillText(G.task.label||'task', tp.x, tp.y+30);
+  // agents
+  for(const a of G.agents){
+    const p=G.pos[a.id]; const col=G.roleColor[a.id];
+    const win=isWinner(a.id) && fi>=frames-1;
+    const rr=(win?15:11)+Math.sin(now*2+a.name.length)*(win?2.2:1);
+    if(win){ cx.shadowColor=col; cx.shadowBlur=22; }
+    cx.beginPath(); cx.arc(p.x,p.y,rr,0,7);
+    cx.fillStyle=col; cx.globalAlpha=win?1:.9; cx.fill(); cx.globalAlpha=1; cx.shadowBlur=0;
+    if(win){ cx.beginPath(); cx.arc(p.x,p.y,rr+5,0,7); cx.strokeStyle=col; cx.lineWidth=1.5; cx.globalAlpha=.7; cx.stroke(); cx.globalAlpha=1; }
+    cx.fillStyle='#e4e4ed'; cx.font='600 11px var(--mono),monospace'; cx.textAlign='center';
+    cx.fillText(a.role, p.x, p.y-rr-8);
+    if(win){ cx.fillStyle=col; cx.font='700 9px var(--mono),monospace'; cx.fillText('◆ WON', p.x, p.y+rr+16); }
+  }
+}
+
+function drawIdle(){
+  cx.fillStyle='#4a4a64'; cx.font='13px var(--mono),monospace'; cx.textAlign='center';
+  cx.fillText(MODE==='diffuse'
+    ? 'type a signal and hit Inject — watch it diffuse through the network'
+    : 'type a task and hit Inject — watch agents claim, back off, and reach consensus',
+    W/2, H/2);
+}
+
+function lerpCol(a,b,t){return [a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t,a[2]+(b[2]-a[2])*t].map(Math.round);}
+
+// ─────────────────────────────────────────── HUD + legend
+function updateHUD(fi){
+  const hud=$('#hud'); let html='';
+  if(MODE==='diffuse'){
+    const fr=TRACE[Math.min(fi,TRACE.length-1)]; const {lv}=nodeLevels(fi);
+    const reached=Object.keys(lv).length; const N=G.ids.length;
+    let maxInt=0,maxHops=0; for(const s of fr.signals){maxInt=Math.max(maxInt,s.intensity);maxHops=Math.max(maxHops,s.hops);}
+    html=stat('reached',reached+' <small>/'+N+'</small>')+stat('coverage',Math.round(reached/N*100)+'<small>%</small>')
+        +stat('intensity',maxInt.toFixed(2))+stat('hops',maxHops)+stat('active',fr.active);
+  }else{
+    let claims=0,backs=0;
+    for(let i=0;i<=fi;i++){const r=TRACE[i]; if(r){claims+=(r.claims||[]).length; backs+=(r.backoffs||[]).length;}}
+    const winner=G.winners&&G.winners[0]?(G.agents.find(a=>a.id===G.winners[0].agent)||{}).role:'—';
+    html=stat('round',fi+' <small>/'+(frames-1)+'</small>')+stat('claims',claims)+stat('back-offs',backs)
+        +stat('winner',fi>=frames-1?(winner||'—'):'…');
+  }
+  hud.innerHTML=html;
+}
+function stat(k,v){return `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`;}
+
+function renderLegend(){
+  const l=$('#legend');
+  if(MODE==='diffuse'){
+    l.innerHTML=`<b>Signal diffusion</b>
+      <div class="row"><span class="sw" style="background:#e8a030"></span>origin (injection point)</div>
+      <div class="row"><span class="sw" style="background:#4d8fec"></span>reached · size = intensity</div>
+      <div class="row"><span class="sw" style="background:#2a2a3c"></span>not yet reached</div>
+      <div class="row" style="margin-top:6px;color:var(--dim)">pulse = arrival · fade = decay</div>`;
+  }else{
+    l.innerHTML=`<b>Emergent consensus</b>
+      <div class="row"><span class="sw" style="background:#4d8fec"></span>Coder</div>
+      <div class="row"><span class="sw" style="background:#c792ea"></span>Reviewer</div>
+      <div class="row"><span class="sw" style="background:#34d399"></span>Analyst</div>
+      <div class="row" style="margin-top:6px;color:var(--dim)">pulse = claim · red = back-off · ◆ = winner</div>`;
+  }
+}
+renderLegend();
+
+// ─────────────────────────────────────────── OWASP benchmark tab
+let benchLoaded=false;
+async function loadBench(){
+  if(benchLoaded) return;
+  try{
+    const r=await fetch('/api/owasp'); const d=await r.json();
+    if(d.error){ $('#bench-content').innerHTML=`<div class="empty">${d.error}</div>`; return; }
+    renderScorecard(d); benchLoaded=true;
+  }catch(e){ $('#bench-content').innerHTML=`<div class="empty">could not load scorecard: ${e.message}</div>`; }
+}
+
+function renderScorecard(d){
+  const o=d.overall;
+  const cats=d.categories||[];
+  const good=o.youden>=0;
+  // scatter
+  const w=520,h=520,ml=54,mt=24,pw=w-ml-28,ph=h-mt-54;
+  const px=f=>ml+f*pw, py=t=>mt+(1-t)*ph;
+  let grid='',pts='';
+  for(let i=0;i<=5;i++){const t=i/5;
+    grid+=`<line x1="${px(t)}" y1="${mt}" x2="${px(t)}" y2="${mt+ph}" stroke="#1e1e32"/>`;
+    grid+=`<line x1="${ml}" y1="${py(t)}" x2="${ml+pw}" y2="${py(t)}" stroke="#1e1e32"/>`;
+    grid+=`<text x="${px(t)}" y="${mt+ph+16}" fill="#4a4a64" font-size="10" text-anchor="middle">${t*100}%</text>`;
+    grid+=`<text x="${ml-8}" y="${py(t)+4}" fill="#4a4a64" font-size="10" text-anchor="end">${t*100}%</text>`;
+  }
+  const diag=`<line x1="${px(0)}" y1="${py(0)}" x2="${px(1)}" y2="${py(1)}" stroke="#4a4a64" stroke-dasharray="5 5" opacity=".7"/>`;
+  for(const c of cats){
+    const col=c.youden>=0?'#34d399':'#f87171';
+    pts+=`<circle cx="${px(c.fpr)}" cy="${py(c.tpr)}" r="7" fill="${col}" stroke="#13131f" stroke-width="1.5"><title>${c.label} — TPR ${(c.tpr*100).toFixed(0)}%, FPR ${(c.fpr*100).toFixed(0)}%, Youden ${c.youden>=0?'+':''}${c.youden.toFixed(2)}</title></circle>`;
+  }
+  const ox=px(o.fpr),oy=py(o.tpr);
+  pts+=`<rect x="${ox-7}" y="${oy-7}" width="14" height="14" fill="#4d8fec" stroke="#13131f" stroke-width="1.5" transform="rotate(45 ${ox} ${oy})"><title>OVERALL — Youden ${o.youden.toFixed(2)}</title></rect>`;
+
+  let rows='';
+  for(const c of cats){
+    const yc=c.youden>=0?'yg':'yb';
+    rows+=`<tr><td>${c.code}</td><td>${c.cwe}</td><td>${c.tp}</td><td>${c.fp}</td><td>${c.tn}</td><td>${c.fn}</td><td>${(c.tpr*100).toFixed(1)}%</td><td>${(c.fpr*100).toFixed(1)}%</td><td class="${yc}">${c.youden>=0?'+':''}${c.youden.toFixed(3)}</td></tr>`;
+  }
+  rows+=`<tr class="total"><td>OVERALL</td><td>—</td><td>${o.tp}</td><td>${o.fp}</td><td>${o.tn}</td><td>${o.fn}</td><td>${(o.tpr*100).toFixed(1)}%</td><td>${(o.fpr*100).toFixed(1)}%</td><td class="${good?'yg':'yb'}">${o.youden>=0?'+':''}${o.youden.toFixed(3)}</td></tr>`;
+
+  $('#bench-content').innerHTML=`
+    <div class="bhead">SMESH × OWASP Benchmark</div>
+    <div class="bmeta">${d.benchmark} · model ${d.model} · ${d.agents_per_case} agents/case · ${d.cases_scored} cases · signal-consensus mesh</div>
+    <div class="bgrid">
+      <div class="bcard">
+        <div class="h">Detection quality (TPR vs FPR)</div>
+        <svg viewBox="0 0 ${w} ${h}">${grid}${diag}${pts}
+          <text x="${ml+pw/2}" y="${h-14}" fill="#7a7a96" font-size="11" text-anchor="middle" font-weight="600">False Positive Rate →</text>
+          <text transform="translate(14 ${mt+ph/2}) rotate(-90)" fill="#7a7a96" font-size="11" text-anchor="middle" font-weight="600">True Positive Rate →</text>
+        </svg>
+      </div>
+      <div class="bcard">
+        <div class="h">Overall Youden index</div>
+        <div class="hero ${good?'g':'b'}">${o.youden>=0?'+':''}${o.youden.toFixed(3)}</div>
+        <div class="sub">TPR ${(o.tpr*100).toFixed(1)}% − FPR ${(o.fpr*100).toFixed(1)}%. 1.0 is perfect; 0.0 is no better than random guessing.</div>
+        <div class="h" style="margin-top:20px">Precision ${(o.precision*100).toFixed(1)}% · Recall ${(o.tpr*100).toFixed(1)}% · F1 ${o.f1.toFixed(3)}</div>
+        <div class="sub">TP ${o.tp} · FP ${o.fp} · TN ${o.tn} · FN ${o.fn}</div>
+      </div>
+    </div>
+    <div class="bcard" style="margin-top:20px">
+      <div class="h">Per-category results</div>
+      <table><thead><tr><th>Category</th><th>CWE</th><th>TP</th><th>FP</th><th>TN</th><th>FN</th><th>TPR</th><th>FPR</th><th>Youden</th></tr></thead><tbody>${rows}</tbody></table>
+    </div>`;
+}
+
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

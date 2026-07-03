@@ -13,7 +13,9 @@ use smesh_agent::{
 use smesh_core::{Network, NetworkTopology, Signal, SignalType};
 use smesh_runtime::{RuntimeConfig, SmeshRuntime};
 
+mod owasp;
 mod review;
+mod showcase;
 mod swarm;
 mod viz;
 
@@ -130,6 +132,14 @@ enum Commands {
         port: u16,
     },
 
+    /// Serve the two-tab kinetic showcase (OWASP benchmark + live mesh)
+    Showcase {
+        /// Port to serve on
+        #[arg(short, long, default_value = "8090")]
+        port: u16,
+    },
+
+
     /// Run web red team mission against a live target (authorized testing only)
     Redteam {
         /// Target domain (e.g., example.com)
@@ -201,6 +211,45 @@ enum Commands {
         #[arg(long, default_value = "3")]
         consensus: u32,
     },
+
+    /// Benchmark the SMESH mesh against the OWASP Benchmark corpus
+    Owasp {
+        /// Path to a BenchmarkJava checkout
+        #[arg(long, default_value = ".owasp-benchmark/BenchmarkJava")]
+        path: PathBuf,
+
+        /// Test cases to sample per category (0 = full corpus)
+        #[arg(long, default_value = "25")]
+        per_category: usize,
+
+        /// OpenRouter model to use
+        #[arg(short, long, default_value = "google/gemini-2.5-flash-lite")]
+        model: String,
+
+        /// Detector agents per test case (1-4)
+        #[arg(long, default_value = "3")]
+        agents: usize,
+
+        /// Agents that must agree to flag a category
+        #[arg(long, default_value = "2")]
+        consensus: u32,
+
+        /// Files analyzed concurrently
+        #[arg(long, default_value = "6")]
+        concurrency: usize,
+
+        /// Write a self-contained HTML scorecard to this path
+        #[arg(long, default_value = "owasp-scorecard.html")]
+        html: PathBuf,
+
+        /// Also write raw results as JSON to this path
+        #[arg(long)]
+        json: Option<PathBuf>,
+
+        /// Re-render the scorecard from a previous results JSON (skips the mesh run)
+        #[arg(long)]
+        from_json: Option<PathBuf>,
+    },
 }
 
 fn setup_logging(verbose: bool) {
@@ -247,6 +296,10 @@ async fn main() -> Result<()> {
             viz::serve(port)?;
             Ok(())
         }
+        Commands::Showcase { port } => {
+            showcase::serve(port)?;
+            Ok(())
+        }
         Commands::Redteam { target } => cmd_redteam(&target).await,
         Commands::Fullscan { target, no_js, analyze, report } => {
             cmd_fullscan(&target, no_js, analyze, report).await
@@ -265,7 +318,86 @@ async fn main() -> Result<()> {
             format,
             consensus,
         } => cmd_swarm(&path, max_files, &format, consensus).await,
+        Commands::Owasp {
+            path,
+            per_category,
+            model,
+            agents,
+            consensus,
+            concurrency,
+            html,
+            json,
+            from_json,
+        } => {
+            cmd_owasp(
+                path,
+                per_category,
+                model,
+                agents,
+                consensus,
+                concurrency,
+                html,
+                json,
+                from_json,
+            )
+            .await
+        }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn cmd_owasp(
+    path: PathBuf,
+    per_category: usize,
+    model: String,
+    agents: usize,
+    consensus: u32,
+    concurrency: usize,
+    html: PathBuf,
+    json: Option<PathBuf>,
+    from_json: Option<PathBuf>,
+) -> Result<()> {
+    use owasp::{report, score, OwaspConfig};
+
+    println!("╔═══════════════════════════════════════╗");
+    println!("║     SMESH × OWASP Benchmark           ║");
+    println!("╚═══════════════════════════════════════╝");
+    println!();
+
+    // Re-render path: load a previous results JSON and skip the mesh entirely.
+    let scorecard = if let Some(src) = from_json {
+        let raw = std::fs::read_to_string(&src)
+            .map_err(|e| anyhow::anyhow!("failed to read {}: {e}", src.display()))?;
+        score::from_json(&raw)
+            .ok_or_else(|| anyhow::anyhow!("could not parse results JSON at {}", src.display()))?
+    } else {
+        let config = OwaspConfig {
+            benchmark_root: path,
+            per_category,
+            model,
+            agents,
+            consensus_threshold: consensus,
+            high_conf_threshold: 0.8,
+            concurrency,
+        };
+        owasp::run_benchmark(config)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+    };
+
+    report::print_scorecard(&scorecard);
+
+    std::fs::write(&html, report::render_html(&scorecard))
+        .map_err(|e| anyhow::anyhow!("failed to write HTML: {e}"))?;
+    println!("\n📊 Scorecard written to: {}", html.display());
+
+    if let Some(json_path) = json {
+        std::fs::write(&json_path, report::to_json(&scorecard))
+            .map_err(|e| anyhow::anyhow!("failed to write JSON: {e}"))?;
+        println!("📄 JSON results written to: {}", json_path.display());
+    }
+
+    Ok(())
 }
 
 async fn cmd_fullscan(target: &str, no_js: bool, analyze: bool, report: bool) -> Result<()> {

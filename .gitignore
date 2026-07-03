@@ -53,3 +53,8 @@ reference/
 # Claude Code local settings (keep settings.json, ignore local overrides)
 .claude/settings.local.json
 CLAUDE.local.md
+
+# OWASP Benchmark corpus (fetched, not committed)
+.owasp-benchmark/
+owasp-scorecard.html
+owasp-results.json

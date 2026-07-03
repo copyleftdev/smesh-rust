@@ -54,6 +54,23 @@ pub struct TaskDefinition {
     pub priority: f64,
 }
 
+/// The claim and back-off events from one settlement round (for tracing/viz).
+#[derive(Debug, Clone, Default)]
+pub struct RoundTrace {
+    /// (agent node id, task id, affinity) for each claim emitted this round.
+    pub claims: Vec<(NodeId, String, f64)>,
+    /// (agent node id, task id) for each claim withdrawn this round.
+    pub backoffs: Vec<(NodeId, String)>,
+}
+
+/// A stable summary of one agent for layout/labelling.
+#[derive(Debug, Clone)]
+pub struct AgentInfo {
+    pub id: NodeId,
+    pub name: String,
+    pub role: String,
+}
+
 /// Result of coordinator execution
 #[derive(Debug, Clone)]
 pub struct CoordinatorResult {
@@ -223,6 +240,13 @@ impl AgentCoordinator {
     /// on exactly one surviving claim per task: consensus *emerges* from local
     /// back-off rather than a central `max`.
     pub fn coordination_round(&mut self) -> bool {
+        self.coordination_round_traced().1
+    }
+
+    /// Like [`coordination_round`], but also returns the per-agent claim and
+    /// back-off events that occurred this round (for visualization / tracing).
+    /// The second tuple element is `true` if the field changed.
+    pub fn coordination_round_traced(&mut self) -> (RoundTrace, bool) {
         // Snapshot so every agent senses the same field state this round.
         let signals: Vec<Signal> = self.field.signals.values().cloned().collect();
 
@@ -245,6 +269,10 @@ impl AgentCoordinator {
         }
 
         let changed = !claims.is_empty() || !backoffs.is_empty();
+        let trace = RoundTrace {
+            claims: claims.clone(),
+            backoffs: backoffs.clone(),
+        };
 
         // Apply decisions to the shared field so they are sensable next round.
         for (node_id, task_id, affinity) in claims {
@@ -266,7 +294,39 @@ impl AgentCoordinator {
             self.withdraw_claim_signal(&task_id, &node_id);
         }
 
-        changed
+        (trace, changed)
+    }
+
+    /// Run decentralized settlement to convergence, capturing each round's
+    /// claim/back-off events. Purely local + LLM-free — suitable for driving a
+    /// live visualization of how consensus emerges.
+    pub fn settle_traced(&mut self) -> Vec<RoundTrace> {
+        let max_rounds = self.config.max_ticks.max(self.agents.len() as u64 * 2 + 4);
+        let mut rounds = Vec::new();
+        for _ in 0..max_rounds {
+            let (trace, changed) = self.coordination_round_traced();
+            rounds.push(trace);
+            if !changed {
+                break;
+            }
+        }
+        rounds
+    }
+
+    /// A stable summary of every agent (node id, display name, role) for
+    /// laying out and labelling a visualization.
+    pub fn agent_roster(&self) -> Vec<AgentInfo> {
+        let mut roster: Vec<AgentInfo> = self
+            .agents
+            .iter()
+            .map(|(id, agent)| AgentInfo {
+                id: id.clone(),
+                name: agent.name().to_string(),
+                role: format!("{:?}", agent.config.role),
+            })
+            .collect();
+        roster.sort_by(|a, b| a.name.cmp(&b.name));
+        roster
     }
 
     /// Read the emergent assignment from the settled field: for each task, the
