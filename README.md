@@ -29,8 +29,8 @@ cargo run --bin smesh -- status
 # Run a simulation (watch signals flow!)
 cargo run --bin smesh -- sim --nodes 50 --ticks 100
 
-# Compare LLM backends (Ollama vs Claude)
-ANTHROPIC_API_KEY=... cargo run --bin smesh -- compare
+# Compare LLM backends (OpenRouter vs Claude)
+cargo run --bin smesh -- compare
 ```
 
 ---
@@ -78,7 +78,7 @@ Think **plant communication**, not message queues:
 
 | Backend | Latency | Cost |
 |---------|---------|------|
-| **Ollama** (local) | 0.1-1s | Free |
+| **OpenRouter** (Gemini, etc.) | 0.5-2s | Pay per token |
 | **Claude** (API) | 1-4s | Pay per token |
 
 ---
@@ -89,11 +89,11 @@ Think **plant communication**, not message queues:
 smesh-rust/
 ├── smesh-core/      # Signals, nodes, fields, networks     ✓
 ├── smesh-runtime/   # QUIC P2P networking                  ✓
-├── smesh-agent/     # Ollama + Claude backends             ✓
+├── smesh-agent/     # OpenRouter + Claude backends         ✓
 └── smesh-cli/       # CLI tools & benchmarks               ✓
 ```
 
-**All components complete.** 80 tests passing.
+**All components complete.** 104 tests passing.
 
 ---
 
@@ -147,10 +147,10 @@ smesh-rust/
 ## 🔧 CLI Commands
 
 ```bash
-smesh status              # Check system & Ollama connection
+smesh status              # Check system & OpenRouter connection
 smesh sim                 # Run signal simulation
 smesh agents --demo       # LLM agent coordination demo
-smesh compare             # Benchmark Ollama vs Claude
+smesh compare             # Benchmark OpenRouter vs Claude
 smesh bench               # Signal processing benchmarks
 smesh review --path ./repo    # SMESH-coordinated code review
 smesh code                # Multi-agent coding swarm (Claude)

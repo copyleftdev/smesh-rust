@@ -49,7 +49,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # CLI
 clap = { version = "4.4", features = ["derive"] }
 
-# HTTP (for Ollama)
+# HTTP (for OpenRouter / Claude APIs)
 reqwest = { version = "0.11", features = ["json"] }
 
 # Time

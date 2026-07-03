@@ -5,8 +5,10 @@ Copy this file to `CLAUDE.local.md` for local settings (gitignored).
 ## Local Environment
 
 ```bash
-# Ollama host (if not default)
-export OLLAMA_HOST="http://localhost:11434"
+# OpenRouter API key (or put it in ~/.creds/openrouter.env)
+export OPENROUTER_API_KEY="sk-or-..."
+# Optional overrides
+export OPENROUTER_MODEL="google/gemini-2.5-flash-lite"
 
 # Anthropic API key for Claude backend
 export ANTHROPIC_API_KEY="sk-ant-..."
@@ -25,9 +27,9 @@ Add your personal coding preferences here:
 
 ## Local Paths
 
-If you have local model paths or custom configurations:
+If you have local custom configurations:
 
 ```bash
-# Example: Local model cache
-export OLLAMA_MODELS="/path/to/models"
+# Example: point at a specific OpenRouter credentials file
+export OPENROUTER_ENV_FILE="$HOME/.creds/openrouter.env"
 ```

@@ -117,13 +117,13 @@ So I built the real thing. **SMESH** (Signal-MESHing)—a plant-inspired coordin
 Instead of sending messages to specific agents, you emit signals into a shared field. Any agent can sense signals that match their interests.
 
 ```rust
-let signal = Signal::builder(SignalType::Task)
+let signal = Signal::builder(SignalType::Coordination)
     .payload(b"review this code".to_vec())
     .intensity(1.0)  // Will decay over time
     .confidence(0.9)
     .build();
 
-field.emit(signal);
+field.emit_anonymous(signal);
 ```
 
 **2. Decay Is a Feature**
@@ -186,7 +186,7 @@ cargo run --bin smesh -- sim --nodes 50 --ticks 100
 cargo run --bin smesh -- compare
 ```
 
-It supports both **Ollama** (local, free) and **Claude** (API) out of the box.
+It supports both **OpenRouter** (Gemini and 300+ models via one API) and **Claude** (API) out of the box.
 
 ---
 
