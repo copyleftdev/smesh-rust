@@ -13,7 +13,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["SMESH Contributors"]
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/smesh-protocol/smesh-rust"
+repository = "https://github.com/copyleftdev/smesh-rust"
 description = "SMESH - Plant-inspired signal diffusion protocol for distributed coordination"
 
 [workspace.dependencies]
