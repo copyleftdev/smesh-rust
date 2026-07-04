@@ -93,23 +93,36 @@
   .adjud-controls{display:flex;align-items:center;gap:14px;padding:14px 20px;border-bottom:1px solid var(--border);background:var(--surface);flex:none}
   .adjud-controls select{font-family:var(--mono);font-size:13px;color:var(--text);background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px 12px;cursor:pointer;min-width:280px;outline:none}
   .adjud-layout{flex:1;display:flex;min-height:0}
-  #adjud-canvas{flex:1;height:100%;display:block}
-  #adjud-audit{width:min(42%,460px);border-left:1px solid var(--border);background:var(--surface);overflow-y:auto;padding:20px}
-  @media (max-width:820px){.adjud-layout{flex-direction:column}#adjud-audit{width:100%;border-left:none;border-top:1px solid var(--border)}}
-  .aud-badge{font-family:var(--mono);font-size:15px;font-weight:700;padding:8px 14px;border-radius:8px;border:1px solid;letter-spacing:.04em;display:inline-block}
-  .aud-h{font-family:var(--mono);font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);margin:20px 0 8px}
-  .aud-prov{background:var(--card);border:1px solid var(--border);border-radius:9px;padding:11px 13px;font-family:var(--mono);font-size:11px;line-height:1.7;color:var(--text2)}
-  .aud-prov .ok{color:var(--green)} .aud-prov b{color:var(--text)}
-  .aud-find{display:flex;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)}
-  .aud-find .dot{width:8px;height:8px;border-radius:50%;margin-top:5px;flex:none}
-  .aud-find .who{font-weight:600;font-size:13px}
-  .aud-find .disp{font-family:var(--mono);font-size:10px;letter-spacing:.05em}
-  .aud-find .reason{color:var(--text2);font-size:12px;margin-top:2px}
-  .aud-find .cite{font-family:var(--mono);font-size:10px;color:var(--dim);margin-top:3px}
-  .aud-gate{background:#38bdf815;border:1px solid #38bdf844;border-radius:9px;padding:11px 13px;margin-top:6px;font-size:12px}
-  .aud-gate .gh{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:#38bdf8;margin-bottom:5px}
-  .aud-gate .gc{font-family:var(--mono);font-size:11px;color:#7fd3f5}
-  .aud-rationale{color:var(--text2);font-size:13px;line-height:1.6;margin-top:8px}
+  #adjud-canvas{flex:1;height:100%;display:block;min-width:0}
+  #adjud-audit{width:min(46%,500px);border-left:1px solid var(--border);background:var(--surface);overflow-y:auto;padding:22px 22px 32px}
+  @media (max-width:860px){.adjud-layout{flex-direction:column}#adjud-audit{width:100%;border-left:none;border-top:1px solid var(--border)}}
+
+  /* outcome header */
+  .dc-outcome{display:flex;align-items:center;gap:12px;margin-bottom:6px}
+  .aud-badge{font-family:var(--mono);font-size:15px;font-weight:700;padding:8px 14px;border-radius:8px;border:1px solid;letter-spacing:.04em}
+  .dc-sub{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin-bottom:20px}
+
+  /* the decision chain */
+  .chain{position:relative}
+  .cstep{display:flex;gap:14px;opacity:0;transform:translateY(8px);animation:crise .45s var(--ease) forwards;animation-delay:calc(var(--i)*80ms)}
+  .crail{position:relative;width:16px;flex:none;display:flex;justify-content:center}
+  .crail::before{content:'';position:absolute;top:14px;bottom:-6px;width:2px;background:var(--border)}
+  .cstep:last-child .crail::before{display:none}
+  .cnode{position:relative;width:14px;height:14px;border-radius:50%;margin-top:3px;box-shadow:0 0 0 3px var(--surface);z-index:1}
+  .cnode.gate{border-radius:3px;transform:rotate(45deg)}
+  .cnode.big{width:18px;height:18px;margin-top:1px}
+  .cbody{flex:1;padding-bottom:20px;min-width:0}
+  .ckind{font-family:var(--mono);font-size:9px;letter-spacing:.11em;text-transform:uppercase;color:var(--dim)}
+  .ctitle{font-size:14px;font-weight:600;margin:2px 0}
+  .cdisp{font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:.03em}
+  .cmeta{font-family:var(--mono);font-size:10px;color:var(--mut);margin-top:2px}
+  .cmeta .ok{color:var(--green)}
+  .creason{color:var(--text2);font-size:12.5px;line-height:1.45;margin-top:3px}
+  .ccite{font-family:var(--mono);font-size:10px;color:var(--dim);margin-top:4px;word-break:break-word}
+  .cgate{background:#38bdf812;border:1px solid #38bdf83a;border-radius:8px;padding:9px 11px;margin-top:5px}
+  .cgate .gc{font-family:var(--mono);font-size:10.5px;color:#7fd3f5;line-height:1.5}
+  .cfinal{font-size:15px;font-weight:700}
+  @keyframes crise{to{opacity:1;transform:none}}
 </style>
 </head>
 <body>
@@ -682,17 +695,53 @@ async function loadAdjud(){
 }
 function renderAudit(s){
   const p=s.policy;
-  const finds=s.findings.map(f=>`<div class="aud-find"><span class="dot" style="background:${f.color}"></span><div>
-    <div class="who">${f.agent} <span class="disp" style="color:${f.color}">${f.disposition}</span></div>
-    <div class="reason">${esc(f.reason)}</div><div class="cite">${esc(f.citation)}</div></div></div>`).join('');
-  const gate=s.gating_constraint?`<div class="aud-gate"><div class="gh">⚖ AION governance gate fired</div><div class="gc">${esc(s.gating_constraint)}</div></div>`:'';
+  const sev={APPROVE:0,FLAG:1,PEND:2,DENY:3};
+  const worst=(s.findings||[]).reduce((a,f)=>((sev[f.disposition]||0)>(sev[a.disposition]||0)?f:a),
+    {disposition:'APPROVE',color:'#34d399'});
   const sig=p.verified?'<span class="ok">verified ✓</span>':'<span style="color:#f87171">UNVERIFIED ✗</span>';
+  const cost='$'+Number(s.claim.cost_usd).toLocaleString();
+
+  const steps=[];
+  steps.push({col:'#4d8fec',kind:'Incoming claim',title:`${s.claim.id} · ${s.claim.drug}`,
+    meta:`tier ${s.claim.tier} · ${s.claim.atc} · ${cost}`});
+  steps.push({col:p.verified?'#34d399':'#f87171',kind:'Signed AION policy',title:p.name,
+    meta:`${p.regulation} · ${p.aion_file} · author ${p.author_id}`,
+    reasonHtml:`signature ${sig} · sha256 ${p.sha256.slice(0,16)}…`});
+  for(const f of s.findings){
+    steps.push({col:f.color,kind:`Rule · ${f.agent}`,
+      titleHtml:`<span class="cdisp" style="color:${f.color}">${f.disposition}</span>`,
+      reason:f.reason,cite:f.citation});
+  }
+  steps.push({col:worst.color,kind:'Mesh consensus',
+    titleHtml:`tentative → <span class="cdisp" style="color:${worst.color}">${worst.disposition}</span>`,
+    reason:'strictest applicable rule governs the tentative decision'});
+  if(s.gating_constraint){
+    steps.push({col:'#38bdf8',gate:true,kind:'AION governance gate — fired',
+      title:'autonomous decision overridden',gateConstraint:s.gating_constraint});
+  }else{
+    steps.push({col:'#38bdf8',gate:true,kind:'AION governance gate',
+      title:'no override',reason:'ai_constraints permit this decision autonomously'});
+  }
+  steps.push({col:s.decision_color,big:true,kind:'Final decision',
+    finalTitle:s.decision_label,finalCol:s.decision_color,reason:s.rationale});
+
   $('#adjud-audit').innerHTML=`
-    <div class="aud-badge" style="background:${s.decision_color}22;color:${s.decision_color};border-color:${s.decision_color}66">${s.decision_label}</div>
-    <div class="aud-h">Signed AION policy · provenance</div>
-    <div class="aud-prov"><b>${esc(p.name)}</b> · ${esc(p.regulation)}<br>${esc(p.aion_file)} · author ${p.author_id}<br>signature ${sig} · sha256 ${p.sha256.slice(0,16)}…</div>
-    <div class="aud-h">Agent findings · cited signed rules</div>${finds}${gate}
-    <div class="aud-h">Rationale</div><div class="aud-rationale">${esc(s.rationale)}</div>`;
+    <div class="dc-outcome"><div class="aud-badge" style="background:${s.decision_color}22;color:${s.decision_color};border-color:${s.decision_color}66">${s.decision_label}</div></div>
+    <div class="dc-sub">policy decision chain · ${steps.length} steps</div>
+    <div class="chain">${steps.map(chainStep).join('')}</div>`;
+}
+function chainStep(st,i){
+  const cls='cnode'+(st.gate?' gate':'')+(st.big?' big':'');
+  let b=`<div class="ckind">${esc(st.kind)}</div>`;
+  if(st.finalTitle) b+=`<div class="cfinal" style="color:${st.finalCol}">${esc(st.finalTitle)}</div>`;
+  else if(st.titleHtml) b+=`<div class="ctitle">${st.titleHtml}</div>`;
+  else if(st.title) b+=`<div class="ctitle">${esc(st.title)}</div>`;
+  if(st.meta) b+=`<div class="cmeta">${esc(st.meta)}</div>`;
+  if(st.reasonHtml) b+=`<div class="cmeta">${st.reasonHtml}</div>`;
+  if(st.reason) b+=`<div class="creason">${esc(st.reason)}</div>`;
+  if(st.cite) b+=`<div class="ccite">${esc(st.cite)}</div>`;
+  if(st.gateConstraint) b+=`<div class="cgate"><div class="gc">${esc(st.gateConstraint)}</div></div>`;
+  return `<div class="cstep" style="--i:${i}"><div class="crail"><span class="${cls}" style="background:${st.col}"></span></div><div class="cbody">${b}</div></div>`;
 }
 function esc(x){ return (x||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 requestAnimationFrame(adjDraw);
