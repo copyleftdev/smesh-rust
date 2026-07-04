@@ -109,8 +109,9 @@
         <div class="seg" id="mode-seg">
           <button class="on" data-mode="diffuse">◇ Diffuse</button>
           <button data-mode="consensus">◈ Consensus</button>
+          <button data-mode="chaos">✷ Chaos</button>
         </div>
-        <div class="field">
+        <div class="field" id="txt-field">
           <input id="txt" type="text" placeholder="type a signal to inject into the mesh…" value="need code review on the auth module">
         </div>
         <div class="diffuse-only" id="diffuse-ctl">
@@ -128,6 +129,17 @@
             <option value="80">80 nodes</option>
             <option value="120">120 nodes</option>
           </select>
+        </div>
+        <div class="diffuse-only" id="chaos-ctl" style="display:none">
+          <select id="atk">
+            <option value="node_failure">node failure</option>
+            <option value="eclipse">eclipse attack</option>
+            <option value="partition">partition + heal</option>
+          </select>
+          <div class="field" style="padding:0 10px;gap:8px">
+            <span class="hint" style="white-space:nowrap">attack <b id="atklbl" style="color:#f87171">20%</b></span>
+            <input id="intensity" type="range" min="0" max="80" value="20" style="width:150px;accent-color:#f87171">
+          </div>
         </div>
         <button class="run" id="run">Inject ▸</button>
       </div>
@@ -149,6 +161,7 @@
         <div class="empty" id="bench-empty">Loading OWASP scorecard…</div>
       </div>
     </section>
+
   </main>
 </div>
 
@@ -211,6 +224,10 @@ function layout(ids, edges){
       P[a].vx-=ux*f;P[a].vy-=uy*f;P[b].vx+=ux*f;P[b].vy+=uy*f;
     }
     for(let i=0;i<n;i++){
+      // gentle gravity keeps disconnected nodes (e.g. failed/eclipsed) from
+      // drifting to infinity, so the graph stays compact and balanced.
+      P[i].vx+=(cxp-P[i].x)*0.03;
+      P[i].vy+=(cyp-P[i].y)*0.03;
       let d=Math.hypot(P[i].vx,P[i].vy)||.01;
       P[i].x+=P[i].vx/d*Math.min(d,temp);
       P[i].y+=P[i].vy/d*Math.min(d,temp);
@@ -269,10 +286,28 @@ function roleColor(role){
   return role==='Coder'?'#4d8fec':role==='Reviewer'?'#c792ea':role==='Analyst'?'#34d399':'#e8a030';
 }
 
+// ─────────────────────────────────────────── run: chaos (resilience)
+async function runChaos(){
+  const body={attack:$('#atk').value, intensity:(+$('#intensity').value)/100, nodes:+$('#nodes').value, topology:$('#topo').value};
+  const r=await fetch('/api/chaos',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const d=await r.json();
+  G={ids:d.nodes,edges:d.edges,origins:[d.origin],pos:layout(d.nodes,d.edges),
+     victims:new Set(d.victims), fidelity:d.fidelity, attack:body.attack};
+  TRACE=d.frames; frames=d.frames.length; head=0; play=true; particles=[]; edgeGlow={};
+  G.adj={}; d.nodes.forEach(id=>G.adj[id]=[]); d.edges.forEach(([a,b])=>{G.adj[a].push(b);G.adj[b].push(a);});
+  G.prevReached=new Set([d.origin]);
+  showTimeline(true);
+}
+
 // ─────────────────────────────────────────── run button
 async function run(){
   if(busy) return; busy=true; $('#run').disabled=true; toast('running mesh…');
-  try{ MODE==='diffuse'?await runDiffuse():await runConsensus(); toast(''); }
+  try{
+    if(MODE==='diffuse') await runDiffuse();
+    else if(MODE==='consensus') await runConsensus();
+    else await runChaos();
+    toast('');
+  }
   catch(e){ toast('engine error: '+e.message); }
   busy=false; $('#run').disabled=false;
 }
@@ -284,10 +319,22 @@ $('#mode-seg').querySelectorAll('button').forEach(b=>{
   b.onclick=()=>{
     MODE=b.dataset.mode;
     $('#mode-seg').querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
-    $('#diffuse-ctl').style.display=MODE==='diffuse'?'flex':'none';
+    $('#diffuse-ctl').style.display=(MODE==='diffuse'||MODE==='chaos')?'flex':'none';
+    $('#chaos-ctl').style.display=MODE==='chaos'?'flex':'none';
+    $('#txt-field').style.display=(MODE==='diffuse'||MODE==='consensus')?'flex':'none';
+    $('#run').textContent=MODE==='chaos'?'Attack ▸':(MODE==='consensus'?'Settle ▸':'Inject ▸');
     TRACE=null; showTimeline(false); renderLegend();
   };
 });
+
+// chaos controls: live re-run as the attack slider / type changes
+let chaosTimer=null;
+$('#intensity').addEventListener('input',e=>{
+  $('#atklbl').textContent=e.target.value+'%';
+  if(MODE!=='chaos') return;
+  clearTimeout(chaosTimer); chaosTimer=setTimeout(run,240);
+});
+$('#atk').addEventListener('change',()=>{ if(MODE==='chaos') run(); });
 
 // ─────────────────────────────────────────── timeline
 function showTimeline(on){
@@ -363,7 +410,7 @@ function frame(now){
 
   // advance playhead (diffuse loops so the spread stays visible; consensus holds on the winner)
   if(play){
-    if(MODE==='diffuse'){
+    if(MODE!=='consensus'){
       head+=dt*8;
       if(head>frames-1+10){ head=0; particles=[]; edgeGlow={}; lastRound=-1; if(G) G.prevReached=new Set(G.origins); }
     }else{
@@ -386,7 +433,7 @@ function frame(now){
     edgeGlow[ekey(a,b)]=g*.94;
   }
 
-  if(MODE==='diffuse'){ drawDiffuse(fi); } else { drawConsensus(fi); }
+  if(MODE==='consensus'){ drawConsensus(fi); } else { drawDiffuse(fi); }
 
   // particles (pulses)
   for(let i=particles.length-1;i>=0;i--){
@@ -411,6 +458,11 @@ function drawDiffuse(fi){
   const now=performance.now()*.004;
   for(let i=0;i<G.ids.length;i++){
     const id=G.ids[i], p=G.pos[id]; if(!p) continue;
+    if(G.victims && G.victims.has(id)){    // failed / eclipsed node
+      cx.beginPath(); cx.arc(p.x,p.y,4,0,7); cx.fillStyle='#4a1521'; cx.fill();
+      cx.beginPath(); cx.arc(p.x,p.y,6.5,0,7); cx.strokeStyle='rgba(248,113,113,.65)'; cx.lineWidth=1.2; cx.stroke();
+      continue;
+    }
     const l=lv[id]||0;                 // 0..1 intensity
     const reached=l>0.001;
     const isOrigin=G.origins.includes(id);
@@ -467,7 +519,14 @@ function lerpCol(a,b,t){return [a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t,a[2]+(b[2]
 // ─────────────────────────────────────────── HUD + legend
 function updateHUD(fi){
   const hud=$('#hud'); let html='';
-  if(MODE==='diffuse'){
+  if(MODE==='chaos'){
+    const N=G.ids.length, vict=G.victims?G.victims.size:0;
+    const {lv}=nodeLevels(fi); const reached=Object.keys(lv).length;
+    const fid=Math.round((G.fidelity||0)*100); const fcol=fid<50?'#f87171':'#34d399';
+    html=stat('attack',(G.attack||'').replace(/_/g,' '))+stat('down',vict+' <small>/'+N+'</small>')
+        +stat('reached',reached)
+        +`<div class="stat"><div class="k">fidelity</div><div class="v" style="color:${fcol}">${fid}<small>%</small></div></div>`;
+  }else if(MODE==='diffuse'){
     const fr=TRACE[Math.min(fi,TRACE.length-1)]; const {lv}=nodeLevels(fi);
     const reached=Object.keys(lv).length; const N=G.ids.length;
     let maxInt=0,maxHops=0; for(const s of fr.signals){maxInt=Math.max(maxInt,s.intensity);maxHops=Math.max(maxHops,s.hops);}
@@ -486,7 +545,13 @@ function stat(k,v){return `<div class="stat"><div class="k">${k}</div><div class
 
 function renderLegend(){
   const l=$('#legend');
-  if(MODE==='diffuse'){
+  if(MODE==='chaos'){
+    l.innerHTML=`<b>Chaos — resilience</b>
+      <div class="row"><span class="sw" style="background:#e8a030"></span>origin</div>
+      <div class="row"><span class="sw" style="background:#4d8fec"></span>honest · reached</div>
+      <div class="row"><span class="sw" style="background:#f87171"></span>failed / eclipsed</div>
+      <div class="row" style="margin-top:6px;color:var(--dim)">drag the attack slider — watch consensus fragment</div>`;
+  }else if(MODE==='diffuse'){
     l.innerHTML=`<b>Signal diffusion</b>
       <div class="row"><span class="sw" style="background:#e8a030"></span>origin (injection point)</div>
       <div class="row"><span class="sw" style="background:#4d8fec"></span>reached · size = intensity</div>

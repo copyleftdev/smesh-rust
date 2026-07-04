@@ -14,6 +14,7 @@ use smesh_core::{Network, NetworkTopology, Signal, SignalType};
 use smesh_runtime::{RuntimeConfig, SmeshRuntime};
 
 mod owasp;
+mod resilience;
 mod review;
 mod showcase;
 mod swarm;
@@ -137,6 +138,29 @@ enum Commands {
         /// Port to serve on
         #[arg(short, long, default_value = "8090")]
         port: u16,
+    },
+
+    /// Benchmark mesh resilience under failure, eclipse, and Byzantine attacks
+    Resilience {
+        /// Number of nodes in the mesh
+        #[arg(long, default_value = "60")]
+        nodes: usize,
+
+        /// Topology (small_world, scale_free, ring, mesh, grid, random)
+        #[arg(short, long, default_value = "small_world")]
+        topology: String,
+
+        /// Trials averaged per sweep point
+        #[arg(long, default_value = "8")]
+        trials: usize,
+
+        /// Write a self-contained HTML scorecard to this path
+        #[arg(long, default_value = "resilience-scorecard.html")]
+        html: PathBuf,
+
+        /// Also write raw results as JSON to this path
+        #[arg(long)]
+        json: Option<PathBuf>,
     },
 
 
@@ -300,6 +324,13 @@ async fn main() -> Result<()> {
             showcase::serve(port)?;
             Ok(())
         }
+        Commands::Resilience {
+            nodes,
+            topology,
+            trials,
+            html,
+            json,
+        } => cmd_resilience(nodes, &topology, trials, html, json).await,
         Commands::Redteam { target } => cmd_redteam(&target).await,
         Commands::Fullscan { target, no_js, analyze, report } => {
             cmd_fullscan(&target, no_js, analyze, report).await
@@ -343,6 +374,53 @@ async fn main() -> Result<()> {
             .await
         }
     }
+}
+
+async fn cmd_resilience(
+    nodes: usize,
+    topology: &str,
+    trials: usize,
+    html: PathBuf,
+    json: Option<PathBuf>,
+) -> Result<()> {
+    use resilience::{report, ResilienceConfig};
+
+    println!("╔═══════════════════════════════════════╗");
+    println!("║     SMESH Resilience Benchmark        ║");
+    println!("╚═══════════════════════════════════════╝\n");
+
+    let topo = match topology {
+        "ring" => NetworkTopology::Ring,
+        "mesh" | "full" => NetworkTopology::FullMesh,
+        "scale_free" | "sf" => NetworkTopology::ScaleFree,
+        "random" => NetworkTopology::Random,
+        "grid" => NetworkTopology::Grid,
+        _ => NetworkTopology::SmallWorld,
+    };
+
+    let cfg = ResilienceConfig {
+        nodes,
+        topology: topo,
+        trials,
+        ..Default::default()
+    };
+
+    println!("Sweeping attacks over the real mesh ({nodes} nodes, {topology}, {trials} trials/point)…");
+    let report_data = resilience::run_benchmark(cfg);
+
+    report::print_report(&report_data);
+
+    std::fs::write(&html, report::render_html(&report_data))
+        .map_err(|e| anyhow::anyhow!("failed to write HTML: {e}"))?;
+    println!("📊 Scorecard written to: {}", html.display());
+
+    if let Some(json_path) = json {
+        std::fs::write(&json_path, report::to_json(&report_data))
+            .map_err(|e| anyhow::anyhow!("failed to write JSON: {e}"))?;
+        println!("📄 JSON results written to: {}", json_path.display());
+    }
+
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

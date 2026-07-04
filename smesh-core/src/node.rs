@@ -174,6 +174,12 @@ impl Node {
             return (false, 0.0);
         }
 
+        // Eclipse attackers black-hole traffic: they accept signals but never
+        // forward them, blocking diffusion paths that route through them.
+        if self.is_malicious && self.malicious_behavior == MaliciousBehavior::Eclipse {
+            return (false, 0.0);
+        }
+
         let origin_trust = self.get_trust(&signal.origin_node_id);
         let effective = signal.confidence * signal.current_intensity;
 
@@ -264,5 +270,22 @@ mod tests {
 
         // Malicious node should reinforce even low-confidence signals
         assert!(node.should_reinforce(&signal, 0.0));
+    }
+
+    #[test]
+    fn test_eclipse_drops_signals() {
+        let mut node = Node::new();
+        // A strong signal an honest node would relay with high probability.
+        let mut signal = Signal::builder(SignalType::Data)
+            .confidence(1.0)
+            .intensity(1.0)
+            .build();
+        signal.current_intensity = 1.0;
+
+        node.make_malicious(MaliciousBehavior::Eclipse);
+        // Eclipse attackers never relay, no matter how strong the signal.
+        for _ in 0..50 {
+            assert_eq!(node.should_relay(&signal, 5), (false, 0.0));
+        }
     }
 }

@@ -80,6 +80,7 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
     let (status, ctype, payload): (&str, &str, String) = match (method.as_str(), path.as_str()) {
         ("POST", "/api/diffuse") => ("200 OK", "application/json", api_diffuse(&body_str)),
         ("POST", "/api/consensus") => ("200 OK", "application/json", api_consensus(&body_str)),
+        ("POST", "/api/chaos") => ("200 OK", "application/json", api_chaos(&body_str)),
         ("GET", "/api/owasp") => ("200 OK", "application/json", api_owasp()),
         ("GET", "/") | ("GET", "/index.html") => {
             ("200 OK", "text/html; charset=utf-8", SHOWCASE_HTML.to_string())
@@ -274,6 +275,38 @@ fn infer_task_type(text: &str) -> (&'static str, &'static str) {
     } else {
         ("analysis", "Analysis")
     }
+}
+
+// ── Chaos endpoint (resilience, real engine) ────────────────────────────────
+
+fn api_chaos(body: &str) -> String {
+    use crate::resilience::scenario::{scenario_trace, Attack, ScenarioConfig};
+
+    let req: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
+    let attack = match req.get("attack").and_then(|v| v.as_str()).unwrap_or("node_failure") {
+        "eclipse" => Attack::Eclipse,
+        "partition" => Attack::Partition,
+        _ => Attack::NodeFailure,
+    };
+    let intensity = req
+        .get("intensity")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.2)
+        .clamp(0.0, 0.9);
+    let nodes = req
+        .get("nodes")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(52)
+        .clamp(6, 200) as usize;
+    let topology = parse_topology(req.get("topology").and_then(|v| v.as_str()).unwrap_or("small_world"));
+
+    let cfg = ScenarioConfig {
+        nodes,
+        topology,
+        ticks: 46,
+        trials: 1,
+    };
+    scenario_trace(attack, intensity, &cfg).to_string()
 }
 
 // ── OWASP scorecard passthrough ─────────────────────────────────────────────
