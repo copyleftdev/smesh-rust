@@ -9,11 +9,30 @@
 </p>
 
 <p align="center">
+  <a href="#-watch-the-demo">Watch the Demo</a> •
   <a href="#-quick-start">Quick Start</a> •
   <a href="#-what-is-this">What Is This?</a> •
   <a href="#-performance">Performance</a> •
   <a href="#-vs-other-tools">Comparison</a>
 </p>
+
+---
+
+## 🎬 Watch the Demo
+
+A narrated walkthrough: a mesh of AI agents adjudicates a real pharmacy claim under
+cryptographically **signed policy** ([AION](https://github.com/aion-context/aion-context)) —
+and when the AI would deny coverage on its own, it's stopped and escalated to a human.
+
+<p align="center">
+  <a href="https://youtu.be/WMM2bjEVV9k">
+    <img src="https://img.youtube.com/vi/WMM2bjEVV9k/maxresdefault.jpg" alt="Watch the SMESH × AION demo" width="720"/>
+  </a>
+  <br/>
+  <a href="https://youtu.be/WMM2bjEVV9k"><strong>▶ Governed AI for regulated decisions — SMESH × AION (2.5 min)</strong></a>
+</p>
+
+> Run it yourself: `cargo run --bin smesh -- showcase` → open <http://localhost:8090/?tour=1> (auto-plays the guided tour).
 
 ---
 
