@@ -13,6 +13,7 @@ use smesh_agent::{
 use smesh_core::{Network, NetworkTopology, Signal, SignalType};
 use smesh_runtime::{RuntimeConfig, SmeshRuntime};
 
+mod adjudicate;
 mod owasp;
 mod resilience;
 mod review;
@@ -138,6 +139,17 @@ enum Commands {
         /// Port to serve on
         #[arg(short, long, default_value = "8090")]
         port: u16,
+    },
+
+    /// Adjudicate pharmaceutical claims against signed AION formulary policies
+    Adjudicate {
+        /// Write a self-contained HTML decision report to this path
+        #[arg(long, default_value = "adjudication-report.html")]
+        html: PathBuf,
+
+        /// Also write results as JSON to this path
+        #[arg(long)]
+        json: Option<PathBuf>,
     },
 
     /// Benchmark mesh resilience under failure, eclipse, and Byzantine attacks
@@ -324,6 +336,7 @@ async fn main() -> Result<()> {
             showcase::serve(port)?;
             Ok(())
         }
+        Commands::Adjudicate { html, json } => cmd_adjudicate(html, json).await,
         Commands::Resilience {
             nodes,
             topology,
@@ -374,6 +387,28 @@ async fn main() -> Result<()> {
             .await
         }
     }
+}
+
+async fn cmd_adjudicate(html: PathBuf, json: Option<PathBuf>) -> Result<()> {
+    use adjudicate::report;
+
+    println!("╔═══════════════════════════════════════╗");
+    println!("║   SMESH × AION Claim Adjudication      ║");
+    println!("╚═══════════════════════════════════════╝");
+
+    let results = adjudicate::adjudicate_samples();
+    report::print_report(&results);
+
+    std::fs::write(&html, report::render_html(&results))
+        .map_err(|e| anyhow::anyhow!("failed to write HTML: {e}"))?;
+    println!("\n📊 Decision report written to: {}", html.display());
+
+    if let Some(json_path) = json {
+        std::fs::write(&json_path, report::to_json(&results))
+            .map_err(|e| anyhow::anyhow!("failed to write JSON: {e}"))?;
+        println!("📄 JSON written to: {}", json_path.display());
+    }
+    Ok(())
 }
 
 async fn cmd_resilience(

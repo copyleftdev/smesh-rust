@@ -1,0 +1,222 @@
+# CMS Medicare Part D Formulary Rules
+# Regulatory Reference: 42 CFR Parts 422 and 423
+# CMS Prescription Drug Manual: Chapter 6 (Formulary), Chapter 18 (Appeals)
+# Last Updated: 2026-05-08
+
+metadata:
+  organization: "CMS Medicare Part D"
+  regulation: "42 CFR § 423"
+  manual_reference: "PDP Manual Chapter 6"
+  compliance_year: 2026
+  review_cycle: "annual"
+
+# ─────────────────────────────────────────────
+# Protected Drug Classes (all-or-substantially-all coverage required)
+# 42 CFR § 423.120(b)(2)(v)
+# ─────────────────────────────────────────────
+protected_classes:
+  - id: PC-01
+    name: antidepressants
+    coverage_requirement: "all_or_substantially_all"
+    atc_codes: [N06A]
+    exception: "may_exclude_duplicates_within_class"
+
+  - id: PC-02
+    name: antipsychotics
+    coverage_requirement: "all_or_substantially_all"
+    atc_codes: [N05A]
+    exception: "may_exclude_duplicates_within_class"
+
+  - id: PC-03
+    name: anticonvulsants
+    coverage_requirement: "all_or_substantially_all"
+    atc_codes: [N03A]
+    exception: "may_exclude_duplicates_within_class"
+
+  - id: PC-04
+    name: antiretrovirals
+    coverage_requirement: "all_or_substantially_all"
+    atc_codes: [J05AR, J05AB, J05AE, J05AF, J05AG]
+    exception: "none"
+    note: "CMS may not restrict access for HIV patients"
+
+  - id: PC-05
+    name: immunosuppressants
+    coverage_requirement: "all_or_substantially_all"
+    atc_codes: [L04A]
+    applies_to: "transplant_rejection_prevention"
+    exception: "may_exclude_duplicates_within_class"
+
+  - id: PC-06
+    name: antineoplastics
+    coverage_requirement: "all_or_substantially_all"
+    atc_codes: [L01]
+    exception: "may_exclude_duplicates_within_class"
+
+# ─────────────────────────────────────────────
+# Formulary Tier Structure
+# ─────────────────────────────────────────────
+formulary_tiers:
+  - tier: 1
+    label: preferred_generic
+    cost_sharing: lowest
+    prior_auth_default: false
+    step_therapy_default: false
+
+  - tier: 2
+    label: generic
+    cost_sharing: low
+    prior_auth_default: false
+    step_therapy_default: false
+
+  - tier: 3
+    label: preferred_brand
+    cost_sharing: medium
+    prior_auth_default: false
+    step_therapy_default: true
+
+  - tier: 4
+    label: non_preferred_brand
+    cost_sharing: high
+    prior_auth_default: true
+    step_therapy_default: true
+
+  - tier: 5
+    label: specialty
+    cost_sharing: highest
+    prior_auth_default: true
+    step_therapy_default: true
+    specialty_threshold_usd: 800
+
+  - tier: 6
+    label: select_care_drugs
+    cost_sharing: lowest
+    note: "Optional preferred cost-sharing tier for value-based arrangements"
+
+# ─────────────────────────────────────────────
+# Utilization Management
+# ─────────────────────────────────────────────
+utilization_management:
+
+  prior_authorization:
+    allowed: true
+    must_include_exception_process: true
+    formulary_exception_response_hours:
+      standard: 72
+      expedited: 24
+    prohibited_for:
+      - emergency_supply_72h
+
+  step_therapy:
+    allowed: true
+    prohibited_classes:
+      - antidepressants       # PC-01 per CMS 2023 guidance
+      - antipsychotics        # PC-02
+      - anticonvulsants       # PC-03
+      - antiretrovirals       # PC-04
+      - immunosuppressants    # PC-05
+    safe_harbor_exception: true
+    grandfathering:
+      required: true
+      applies_to: "stable_patients_already_on_non_preferred_drug"
+
+  quantity_limits:
+    allowed: true
+    must_align_with: "fda_approved_dosing"
+    exception_required: true
+
+  non_interference:
+    cms_may_not_negotiate_prices: true
+    reference: "42 U.S.C. § 1395w-111(i)"
+
+# ─────────────────────────────────────────────
+# Coverage Determinations and Appeals
+# 42 CFR § 423.566 – 423.636
+# ─────────────────────────────────────────────
+appeals:
+  coverage_determination:
+    standard_days: 72        # hours for Part D initial determination
+    expedited_hours: 24
+
+  redetermination:
+    standard_days: 7
+    expedited_days: 3
+
+  independent_review_entity:
+    standard_days: 7
+    expedited_days: 3
+
+  administrative_law_judge:
+    minimum_amount_usd: 200
+    days: 60
+
+  medicare_appeals_council:
+    days: 60
+
+  federal_district_court:
+    minimum_amount_usd: 1830  # 2026 threshold (CPI-adjusted annually)
+
+  auto_forward_to_ire_threshold_days: 60
+
+# ─────────────────────────────────────────────
+# Coverage Phases (2026 Redesign — IRA § 11202)
+# Inflation Reduction Act eliminated the coverage gap (donut hole)
+# ─────────────────────────────────────────────
+coverage_phases:
+  initial:
+    deductible_max_usd: 590     # 2026 standard deductible
+    beneficiary_coinsurance: 0.25
+
+  catastrophic:
+    oop_threshold_usd: 2000     # IRA cap effective 2025
+    beneficiary_coinsurance: 0.00
+    note: "No cost-sharing once OOP cap reached — IRA 2025 redesign"
+
+# ─────────────────────────────────────────────
+# Medication Therapy Management (MTM)
+# 42 CFR § 423.153(d)
+# ─────────────────────────────────────────────
+medication_therapy_management:
+  eligibility_criteria:
+    min_chronic_conditions: 3
+    target_conditions:
+      - diabetes
+      - heart_failure
+      - dyslipidemia
+      - respiratory_disease
+      - bone_disease_arthritis
+      - hypertension
+      - mental_health
+    min_drugs: 3
+    likely_to_incur_annual_drug_costs_usd: 4453  # 2026 CMS threshold
+
+  required_services:
+    comprehensive_medication_review:
+      frequency: "annual"
+      format: "interactive_person_to_person"
+    targeted_medication_review:
+      frequency: "quarterly_at_minimum"
+    written_summary: true
+
+# ─────────────────────────────────────────────
+# AI / Agent Constraints
+# ─────────────────────────────────────────────
+ai_constraints:
+  allowed_operations:
+    - suggest_tier_placement
+    - flag_missing_protected_class_coverage
+    - draft_pa_criteria_for_human_review
+    - generate_coverage_determination_templates
+    - detect_step_therapy_violations_for_protected_classes
+
+  prohibited_operations:
+    - autonomous_coverage_denial
+    - override_human_pharmacist_review
+    - apply_step_therapy_to_protected_classes
+    - modify_formulary_without_cms_approval_cycle
+    - share_phi_outside_plan_sponsor_boundary
+
+  human_oversight_required_for:
+    - coverage_determination_final_decision
+    - formulary_annual_submission_to_cms
+    - exception_approval_for_non_formulary_drug

@@ -81,6 +81,7 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
         ("POST", "/api/diffuse") => ("200 OK", "application/json", api_diffuse(&body_str)),
         ("POST", "/api/consensus") => ("200 OK", "application/json", api_consensus(&body_str)),
         ("POST", "/api/chaos") => ("200 OK", "application/json", api_chaos(&body_str)),
+        ("POST", "/api/adjudicate") => ("200 OK", "application/json", api_adjudicate(&body_str)),
         ("GET", "/api/owasp") => ("200 OK", "application/json", api_owasp()),
         ("GET", "/") | ("GET", "/index.html") => {
             ("200 OK", "text/html; charset=utf-8", SHOWCASE_HTML.to_string())
@@ -307,6 +308,27 @@ fn api_chaos(body: &str) -> String {
         trials: 1,
     };
     scenario_trace(attack, intensity, &cfg).to_string()
+}
+
+// ── Adjudication endpoint (AION-signed pharma claims) ───────────────────────
+
+fn api_adjudicate(body: &str) -> String {
+    use crate::adjudicate::{claim::sample_claims, engine::adjudicate, policy::load_all, report::adjudication_json};
+
+    let req: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
+    let idx = req.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+
+    let policies = load_all();
+    let claims = sample_claims();
+    let sel = idx.min(claims.len().saturating_sub(1));
+    let adj = adjudicate(&claims[sel], &policies);
+
+    let list: Vec<serde_json::Value> = claims
+        .iter()
+        .map(|c| json!({ "id": c.id, "drug": c.drug, "atc": c.atc }))
+        .collect();
+
+    json!({ "claims": list, "selected": adjudication_json(&adj) }).to_string()
 }
 
 // ── OWASP scorecard passthrough ─────────────────────────────────────────────

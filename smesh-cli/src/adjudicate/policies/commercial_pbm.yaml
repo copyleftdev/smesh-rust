@@ -1,0 +1,247 @@
+# Commercial PBM Formulary Rules
+# Reference: NCPDP SCRIPT, ERISA, ACA § 2719, NAIC Model Act
+# Applicable to: self-insured employer plans, fully-insured group, individual market
+# Last Updated: 2026-05-08
+
+metadata:
+  organization: "Commercial PBM"
+  frameworks:
+    - ERISA
+    - ACA
+    - NCPDP_SCRIPT_2017071
+    - URAC_PBM_Standards
+  review_cycle: "annual_or_triggered_by_contract"
+
+# ─────────────────────────────────────────────
+# Tier Structure
+# ─────────────────────────────────────────────
+formulary_tiers:
+  - tier: 1
+    label: preferred_generic
+    cost_share_type: copay
+    typical_copay_usd: 10
+    prior_auth: false
+    step_therapy: false
+
+  - tier: 2
+    label: generic
+    cost_share_type: copay
+    typical_copay_usd: 15
+    prior_auth: false
+    step_therapy: false
+
+  - tier: 3
+    label: preferred_brand
+    cost_share_type: copay
+    typical_copay_usd: 45
+    prior_auth: false
+    step_therapy: true   # step from tier-1/2 generic first
+
+  - tier: 4
+    label: non_preferred_brand
+    cost_share_type: copay_or_coinsurance
+    typical_copay_usd: 85
+    prior_auth: true
+    step_therapy: true
+
+  - tier: 5
+    label: specialty
+    cost_share_type: coinsurance
+    typical_coinsurance: 0.25
+    cost_share_cap_usd: 150
+    prior_auth: true
+    step_therapy: true
+    specialty_threshold_usd: 800   # NCQA/URAC definition
+
+  - tier: 6
+    label: preventive_zero_cost_share
+    cost_share_type: none
+    applies_to: "ACA_preventive_services_A_B_rating"
+    note: "ACA § 2713 — no cost sharing for USPSTF A/B preventive drugs"
+
+# ─────────────────────────────────────────────
+# Generic Substitution
+# ─────────────────────────────────────────────
+generic_substitution:
+  mandatory_generic: true
+  daw_codes_honored:
+    - DAW_0   # no product selection indicated
+    - DAW_1   # substitution not allowed by prescriber
+    - DAW_2   # substitution allowed — patient requests brand
+    - DAW_9   # other
+  daw_2_cost_difference: "beneficiary_pays_brand_minus_generic"
+  biosimilar_interchangeable:
+    auto_substitute: true
+    patient_consent_required: false
+    physician_opt_out_allowed: true
+
+# ─────────────────────────────────────────────
+# Utilization Management
+# ─────────────────────────────────────────────
+utilization_management:
+
+  step_therapy:
+    allowed: true
+    max_step_duration_before_escalation_days: 90
+    override_codes:
+      - contraindication_to_preferred_drug
+      - documented_failure_of_preferred_drug
+      - drug_interaction_with_concurrent_medication
+      - prior_therapy_established_before_coverage_start
+    safe_harbor:
+      grandfathering: true
+      applies_to: "patient_currently_stable_on_non_preferred"
+
+  prior_authorization:
+    standard_response_hours: 72
+    expedited_response_hours: 24    # urgent / emergency
+    urgent_criteria: "life_threatening_or_condition_worsening"
+    retroactive_pa_allowed_days: 2  # for emergencies
+    auto_approve_triggers:
+      - "identical_drug_approved_prior_12_months"
+      - "prescriber_oncology_specialty_for_antineoplastic"
+
+  quantity_limits:
+    source: "FDA_labeling_and_clinical_guidelines"
+    override_allowed: true
+    override_criteria:
+      - "documented_inadequate_response_to_limited_qty"
+      - "FDA_approved_off_label_with_compendia_support"
+
+  refill_too_soon:
+    min_days_supply_dispensed_percentage: 0.75  # 75% of days supply
+
+# ─────────────────────────────────────────────
+# Specialty Drug Management
+# ─────────────────────────────────────────────
+specialty:
+  limited_distribution_drugs:
+    require_specialty_pharmacy: true
+    network_adequacy:
+      min_specialty_pharmacies_per_plan: 1
+      must_include_patient_preferred_if_accredited: true
+
+  site_of_care:
+    home_infusion_preferred_over_hospital_outpatient: true
+    cost_effectiveness_threshold_annual_usd: 50000
+    exceptions:
+      - patient_clinical_stability_concern
+      - infusion_reaction_history
+      - no_home_infusion_provider_within_50_miles
+
+  oncology:
+    oral_parity:
+      copay_may_not_exceed_iv_equivalent: true  # many state parity laws
+    clinical_pathway_adherence:
+      recommended: true
+      mandatory: false
+
+  biosimilars:
+    auto_substitution_for_fda_interchangeable: true
+    preferred_tier_for_biosimilar: 3   # typically lower tier than reference
+    rebate_pass_through: "plan_sponsor_option"
+
+# ─────────────────────────────────────────────
+# Copay Assistance and Accumulator Programs
+# ─────────────────────────────────────────────
+copay_assistance:
+  accumulator_adjustment_program:
+    enabled: "plan_sponsor_election"
+    applies_to: "manufacturer_coupons_non_LIS"
+    excluded:
+      - low_income_subsidy_eligible
+      - no_generic_equivalent_available
+    note: "ACA preventive benefit coupons must accumulate — ACA § 2713"
+
+  maximizer_programs:
+    enabled: "plan_sponsor_election"
+    patient_consent_required: false   # varies by state law
+    state_restrictions:
+      - "some_states_prohibit_accumulators_for_any_brand"
+
+# ─────────────────────────────────────────────
+# NCPDP Claim Processing Rules
+# ─────────────────────────────────────────────
+claim_processing:
+  transaction_standard: "NCPDP_SCRIPT_2017071"
+  reject_codes:
+    - code: "70"
+      meaning: "product_not_covered"
+    - code: "75"
+      meaning: "prior_auth_required"
+    - code: "76"
+      meaning: "plan_limitations_exceeded"
+    - code: "88"
+      meaning: "daw_code_error"
+
+  point_of_sale_dur:
+    enabled: true
+    required_edits:
+      - drug_drug_interaction_severity_1_2
+      - drug_allergy
+      - drug_pregnancy
+      - refill_too_soon
+      - high_dose_alert
+      - duplicate_therapy
+
+  coordination_of_benefits:
+    method: "NCPDP_COB"
+    pharmacy_receives_total_plan_amount: true
+
+# ─────────────────────────────────────────────
+# Network and Dispensing
+# ─────────────────────────────────────────────
+network:
+  retail_days_supply_max: 34
+  mail_order_days_supply: 90
+  mail_order_cost_share_discount: true
+
+  preferred_pharmacy_network:
+    cost_share_differential_allowed: true
+    must_include_independents: "network_adequacy_dependent"
+
+  specialty_dispensing:
+    white_bagging_allowed: true
+    brown_bagging:
+      hospital_may_restrict: true
+      patient_choice_must_be_preserved: true
+
+# ─────────────────────────────────────────────
+# Transparency and Reporting
+# ─────────────────────────────────────────────
+transparency:
+  formulary_disclosure:
+    searchable_online_tool: true
+    updated_within_days: 30
+    exception_request_process_published: true
+
+  rebate_pass_through:
+    plan_sponsor_entitled_to_audit: true
+    fiduciary_rules_apply: "ERISA_plan_sponsors"
+
+  drug_price_transparency:
+    aca_machine_readable_formulary: true  # ACA § 1311 transparency reporting
+
+# ─────────────────────────────────────────────
+# AI / Agent Constraints
+# ─────────────────────────────────────────────
+ai_constraints:
+  allowed_operations:
+    - recommend_tier_placement_with_evidence_basis
+    - flag_step_therapy_protocol_violations
+    - generate_pa_criteria_drafts
+    - identify_biosimilar_substitution_opportunities
+    - alert_drug_interaction_at_point_of_sale
+    - detect_accumulator_adjustment_edge_cases
+
+  prohibited_operations:
+    - autonomous_claim_denial
+    - override_pharmacist_dur_professional_judgment
+    - access_manufacturer_rebate_data_without_fiduciary_check
+    - share_member_phi_with_manufacturer
+
+  human_oversight_required_for:
+    - formulary_change_final_approval
+    - step_therapy_override_denial
+    - specialty_drug_pa_denial
+    - member_appeal_final_resolution

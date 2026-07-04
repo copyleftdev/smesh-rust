@@ -58,3 +58,7 @@ CLAUDE.local.md
 .owasp-benchmark/
 owasp-scorecard.html
 owasp-results.json
+
+# Adjudication demo output
+adjudication-report.html
+adjudication-results.json
