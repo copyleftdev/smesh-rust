@@ -123,6 +123,27 @@
   .cgate .gc{font-family:var(--mono);font-size:10.5px;color:#7fd3f5;line-height:1.5}
   .cfinal{font-size:15px;font-weight:700}
   @keyframes crise{to{opacity:1;transform:none}}
+
+  /* ── Guided tour ── */
+  .tourbtn{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#06060c;background:var(--accent);border:none;padding:8px 15px;border-radius:8px;cursor:pointer;font-weight:700;transition:transform .15s var(--ease),box-shadow .2s}
+  .tourbtn:hover{transform:translateY(-1px);box-shadow:0 6px 20px var(--glow)}
+  #tour{position:fixed;inset:0;z-index:50;pointer-events:none;display:flex;align-items:flex-end;justify-content:center;padding:0 24px 34px}
+  #tour.tour-hidden{display:none}
+  .tour-caption{pointer-events:auto;width:min(720px,92vw);background:rgba(10,10,18,.82);backdrop-filter:blur(16px);border:1px solid #2a2f45;border-radius:16px;padding:20px 24px;box-shadow:0 20px 60px rgba(0,0,0,.55);animation:tcin .5s var(--ease)}
+  @keyframes tcin{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+  .tc-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+  .tc-step{font-family:var(--mono);font-size:11px;color:var(--mut)}
+  .tc-badge{font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);border:1px solid #2a3a58;border-radius:20px;padding:3px 10px}
+  .tc-title{font-size:22px;font-weight:700;letter-spacing:-.01em;margin-bottom:5px}
+  .tc-body{font-size:15px;line-height:1.5;color:#c9cede}
+  .tc-bar{height:3px;background:#242a3d;border-radius:3px;margin:16px 0 12px;overflow:hidden}
+  #tc-fill{height:100%;width:0;background:var(--accent);border-radius:3px;transition:width .2s linear}
+  .tc-ctrl{display:flex;align-items:center;gap:8px}
+  .tc-ctrl button{background:#171a26;border:1px solid #2a2f45;color:var(--text);width:38px;height:34px;border-radius:9px;cursor:pointer;font-size:16px;transition:background .15s}
+  .tc-ctrl button:hover{background:#222738}
+  #tc-play{background:var(--accent);color:#06060c;border-color:var(--accent);font-weight:700}
+  .tc-flex{flex:1}
+  .tc-exit{width:auto!important;padding:0 14px;font-family:var(--mono);font-size:11px;letter-spacing:.04em;color:var(--mut)!important}
 </style>
 </head>
 <body>
@@ -135,6 +156,7 @@
       <button class="tab" data-tab="bench">▚ OWASP Benchmark</button>
     </div>
     <div class="spacer"></div>
+    <button id="start-tour" class="tourbtn">▶ Guided Tour</button>
     <div class="hint">real engine · signals decay, diffuse &amp; reinforce</div>
   </header>
 
@@ -212,6 +234,24 @@
       </div>
     </section>
   </main>
+
+  <!-- GUIDED TOUR overlay -->
+  <div id="tour" class="tour-hidden">
+    <div class="tour-caption">
+      <div class="tc-top"><span class="tc-step" id="tc-step">1 / 10</span><span class="tc-badge">◈ narrated tour</span></div>
+      <div class="tc-title" id="tc-title"></div>
+      <div class="tc-body" id="tc-body"></div>
+      <div class="tc-bar"><div id="tc-fill"></div></div>
+      <div class="tc-ctrl">
+        <button id="tc-prev" title="previous">‹</button>
+        <button id="tc-play" title="play/pause">⏸</button>
+        <button id="tc-next" title="next">›</button>
+        <div class="tc-flex"></div>
+        <button id="tc-exit" class="tc-exit">✕ Exit tour</button>
+      </div>
+    </div>
+    <audio id="tour-audio" preload="auto"></audio>
+  </div>
 </div>
 
 <script>
@@ -812,6 +852,62 @@ function renderScorecard(d){
 }
 
 requestAnimationFrame(frame);
+
+// ─────────────────────────────────────────── Guided narrated tour
+const TOUR=[
+  {id:'s1_intro',       tab:'live',  action:'title',       title:'Meet SMESH',                 cap:"A new way to make regulated decisions — inspired by nature."},
+  {id:'s2_inspiration', tab:'live',  action:'diffuse',     title:'Inspired by forests',        cap:"Beneath every forest, trees share signals through a living network — no tree in charge."},
+  {id:'s3_consensus',   tab:'live',  action:'consensus',   title:'Agreement, without a boss',  cap:"Many small specialists weigh in and reach agreement on their own."},
+  {id:'s4_resilience',  tab:'live',  action:'chaos',       title:'No single point of failure', cap:"Knock out parts of the network — even hostile ones — and it routes around the damage."},
+  {id:'s5_rulebook',    tab:'adjud', action:'select_claim',claim:4,title:'The signed rulebook: AION',  cap:"The real regulations — cryptographically signed, versioned, tamper-proof."},
+  {id:'s6_combination', tab:'adjud', action:'hold',        claim:4,title:'Intelligence, meet compliance',cap:"The mesh decides. The signed rules govern what it's allowed to do."},
+  {id:'s7_claim',       tab:'adjud', action:'select_claim',claim:4,title:'A real claim arrives',       cap:"An expensive, off-label medication. Each specialist checks it against the signed policy."},
+  {id:'s8_chain',       tab:'adjud', action:'hold',        claim:4,title:'The decision chain',         cap:"Formulary passes · prior auth needed · step therapy needed · coverage says deny."},
+  {id:'s9_gate',        tab:'adjud', action:'hold',        claim:4,title:'The safeguard',              cap:"AION forbids the AI from denying coverage on its own → escalate to a human."},
+  {id:'s10_close',      tab:'adjud', action:'hold',        claim:4,title:'Explainable, end to end',    cap:"Decisions made like a forest. Governed like a regulation."},
+];
+let tourIdx=-1, tourClaim=null;
+const tAudio=$('#tour-audio');
+
+function switchTab(which){ const b=document.querySelector('.tab[data-tab="'+which+'"]'); if(b) b.click(); }
+function setMode(m){ const b=document.querySelector('#mode-seg button[data-mode="'+m+'"]'); if(b) b.click(); }
+function tourSelectClaim(i){ const s=$('#claim-sel'); if(!s||!s.options.length){ setTimeout(()=>tourSelectClaim(i),200); return; } s.value=String(i); s.dispatchEvent(new Event('change')); }
+
+function runSceneAction(s){
+  switchTab(s.tab);
+  setTimeout(()=>{
+    if(s.action==='diffuse'){ setMode('diffuse'); $('#run').click(); }
+    else if(s.action==='consensus'){ setMode('consensus'); setTimeout(()=>$('#run').click(),200); }
+    else if(s.action==='chaos'){ setMode('chaos'); const a=$('#atk'); if(a)a.value='node_failure'; const it=$('#intensity'); if(it){it.value=45; $('#atklbl').textContent='45%';} setTimeout(()=>$('#run').click(),220); }
+    else if(s.tab==='adjud' && s.claim!=null){
+      // Re-select on an explicit 'arrival' scene; otherwise only if the claim changed
+      // (so jumping straight to any demo scene still shows the right claim).
+      if(s.action==='select_claim' || s.claim!==tourClaim){ tourClaim=s.claim; tourSelectClaim(s.claim); }
+    }
+  },160);
+}
+
+function gotoScene(i){
+  if(i<0||i>=TOUR.length) return;
+  tourIdx=i; const s=TOUR[i];
+  $('#tc-step').textContent=(i+1)+' / '+TOUR.length;
+  $('#tc-title').textContent=s.title;
+  $('#tc-body').textContent=s.cap;
+  $('#tc-fill').style.width='0%';
+  runSceneAction(s);
+  tAudio.src='/audio/'+s.id+'.mp3';
+  tAudio.play().catch(()=>{}); $('#tc-play').textContent='⏸';
+}
+function startTour(){ tourIdx=-1; tourClaim=null; $('#tour').classList.remove('tour-hidden'); gotoScene(0); }
+function exitTour(){ tAudio.pause(); $('#tour').classList.add('tour-hidden'); }
+tAudio.addEventListener('ended',()=>{ if(tourIdx<TOUR.length-1) gotoScene(tourIdx+1); });
+tAudio.addEventListener('timeupdate',()=>{ const f=tAudio.duration?tAudio.currentTime/tAudio.duration:0; $('#tc-fill').style.width=(f*100)+'%'; });
+$('#tc-play').onclick=()=>{ if(tAudio.paused){ tAudio.play().catch(()=>{}); $('#tc-play').textContent='⏸'; } else { tAudio.pause(); $('#tc-play').textContent='▶'; } };
+$('#tc-next').onclick=()=>gotoScene(tourIdx+1);
+$('#tc-prev').onclick=()=>gotoScene(tourIdx-1);
+$('#tc-exit').onclick=exitTour;
+$('#start-tour').onclick=startTour;
+document.addEventListener('keydown',e=>{ if($('#tour').classList.contains('tour-hidden'))return; if(e.key==='ArrowRight')gotoScene(tourIdx+1); if(e.key==='ArrowLeft')gotoScene(tourIdx-1); if(e.key==='Escape')exitTour(); });
 </script>
 </body>
 </html>
