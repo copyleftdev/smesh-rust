@@ -68,7 +68,14 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
     reader.read_line(&mut request_line)?;
     let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or("").to_string();
-    let path = parts.next().unwrap_or("/").to_string();
+    // Strip any query string so "/?tour=1" routes like "/".
+    let path = parts
+        .next()
+        .unwrap_or("/")
+        .split('?')
+        .next()
+        .unwrap_or("/")
+        .to_string();
 
     // Headers (we only need Content-Length).
     let mut content_length = 0usize;

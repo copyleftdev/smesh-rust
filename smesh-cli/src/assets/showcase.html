@@ -908,6 +908,8 @@ $('#tc-prev').onclick=()=>gotoScene(tourIdx-1);
 $('#tc-exit').onclick=exitTour;
 $('#start-tour').onclick=startTour;
 document.addEventListener('keydown',e=>{ if($('#tour').classList.contains('tour-hidden'))return; if(e.key==='ArrowRight')gotoScene(tourIdx+1); if(e.key==='ArrowLeft')gotoScene(tourIdx-1); if(e.key==='Escape')exitTour(); });
+// Deep link: /?tour=1 auto-plays the narrated tour (for sharing / recording).
+if(new URLSearchParams(location.search).get('tour')==='1'){ window.addEventListener('load',()=>setTimeout(startTour,1200)); }
 </script>
 </body>
 </html>
