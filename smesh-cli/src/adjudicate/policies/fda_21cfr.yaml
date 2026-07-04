@@ -1,0 +1,277 @@
+# FDA / 21 CFR Formulary Compliance Rules
+# References: 21 CFR Parts 200-1299, FDCA § 505, 505(b)(2), 505(j), 351(k)
+# DEA: 21 CFR Parts 1300-1321
+# Last Updated: 2026-05-08
+
+metadata:
+  organization: "FDA/DEA Regulatory"
+  regulations:
+    - "21 CFR Parts 200-1299"
+    - "21 CFR Parts 1300-1321"
+    - "FDCA § 505, 505(b)(2), 505(j)"
+    - "FDCA § 351(k) Biosimilars"
+  review_trigger: "FDA_label_change_or_new_approval"
+
+# ─────────────────────────────────────────────
+# DEA Controlled Substance Schedules
+# 21 CFR § 1308
+# ─────────────────────────────────────────────
+controlled_substances:
+  schedule_II:
+    abuse_potential: high
+    accepted_medical_use: true
+    dependence: "severe_psychological_or_physical"
+    prescription_requirements:
+      written_rx_only: true
+      e_prescribing_allowed: true   # DEA IFR 2010 + EPCS
+      no_refills: true
+      partial_fills_allowed: true   # CARA 2016 for terminally ill
+      emergency_oral_max_days: 3
+    examples:
+      - oxycodone
+      - hydrocodone_combination_products
+      - fentanyl
+      - amphetamine
+      - methylphenidate
+      - cocaine  # topical anesthetic
+
+  schedule_III:
+    prescription_requirements:
+      refills_max: 5
+      valid_days: 180
+      e_prescribing_allowed: true
+    examples:
+      - buprenorphine
+      - ketamine
+      - anabolic_steroids
+      - testosterone
+
+  schedule_IV:
+    prescription_requirements:
+      refills_max: 5
+      valid_days: 180
+    examples:
+      - benzodiazepines
+      - carisoprodol
+      - tramadol
+      - zolpidem
+
+  schedule_V:
+    prescription_requirements:
+      refills_max: 5
+      valid_days: 180
+    examples:
+      - pregabalin
+      - lacosamide
+      - cough_preparations_with_codeine_lt_200mg_per_100ml
+
+  prescriber_requirements:
+    dea_registration_required: true
+    xwaiver_for_buprenorphine:
+      eliminated: true    # SUPPORT Act 2023 — no waiver required
+    pmp_check:
+      required_by_many_states: true
+      cms_requirement_for_prescribers: true
+
+# ─────────────────────────────────────────────
+# REMS (Risk Evaluation and Mitigation Strategies)
+# FDCA § 505-1
+# ─────────────────────────────────────────────
+rems_programs:
+  triggers:
+    - serious_adverse_event_risk_without_mitigation
+    - new_drug_application_fda_determination
+
+  required_elements:
+    medication_guide:
+      always: false
+      when_required: "serious_and_unexpected_adverse_events"
+
+    communication_plan:
+      always: false
+      when_required: "healthcare_professional_education_needed"
+
+    etasu:  # Elements to Assure Safe Use
+      always: false
+      when_required: "most_serious_risks"
+      examples:
+        - dispensing_only_certified_pharmacies
+        - prescriber_certification_required
+        - patient_enrollment_registry
+        - lab_monitoring_required
+
+  notable_rems_drugs:
+    - drug: clozapine
+      rems: REMS_Clozapine
+      requirement: anc_monitoring_before_each_dispense
+      registry: clozapine_rems_program
+
+    - drug: isotretinoin
+      rems: iPLEDGE
+      requirement: pregnancy_prevention_program
+      registry: iPLEDGE_registry
+
+    - drug: thalidomide_lenalidomide_pomalidomide
+      rems: THALOMID_REVLIMID_POMALYST_REMS
+      requirement: pregnancy_prevention_and_prescriber_training
+
+    - drug: buprenorphine_naloxone
+      rems: BUPRENORPHINE_REMS
+      requirement: prescriber_education_program
+
+    - drug: sodium_oxybate
+      rems: XYREM_XYWAV_REMS
+      requirement: central_pharmacy_dispensing_only
+
+  formulary_constraint:
+    covered_rems_drug_requires_rems_compliance_check: true
+    dispensing_without_rems_clearance: prohibited
+
+# ─────────────────────────────────────────────
+# NDC Validation
+# 21 CFR § 207
+# ─────────────────────────────────────────────
+ndc_validation:
+  format: "5-4-2"   # labeler-product-package (10 digits)
+  cms_billing_format: "11-digit_zero_padded"
+  labeler_code_source: "FDA_NDC_directory"
+
+  validation_rules:
+    - ndc_must_exist_in_fda_ndc_database: true
+    - labeler_code_must_be_active: true
+    - product_must_match_claim: true     # NDC on claim must match drug dispensed
+    - package_size_must_match_label: true
+
+  exclusion_from_federal_programs:
+    excluded_manufacturer_list: "OIG_exclusion_database"
+    check_frequency: "at_point_of_adjudication"
+
+# ─────────────────────────────────────────────
+# Generic Drug Approval — ANDA (505(j))
+# ─────────────────────────────────────────────
+generics:
+  therapeutic_equivalence_codes:
+    A_rated: "therapeutically_equivalent_substitutable"
+    B_rated: "not_therapeutically_equivalent"
+    AB: "most_common — oral_solid_dosage_forms"
+    AP: "injectable_aqueous_solutions"
+    AT: "topical_products"
+
+  formulary_constraint:
+    a_rated_generic_preferred: true
+    b_rated_requires_clinical_justification: true
+
+  orange_book:
+    source: "FDA_Orange_Book_online"
+    update_frequency: "monthly"
+
+# ─────────────────────────────────────────────
+# Biosimilar Approval — BLA 351(k)
+# ─────────────────────────────────────────────
+biosimilars:
+  approval_pathways:
+    biosimilar: "highly_similar_no_clinically_meaningful_differences"
+    interchangeable: "same_clinical_result_any_patient_no_additional_risk_alternating"
+
+  purple_book:
+    source: "FDA_Purple_Book_online"
+    update_frequency: "continuous"
+
+  formulary_rules:
+    interchangeable_may_auto_substitute: true
+    non_interchangeable_biosimilar_requires_prescriber_approval: true
+    reference_product_on_higher_tier_preferred: false  # biosimilar should be preferred
+
+  naming:
+    nonproprietary_name_includes_suffix: true  # e.g., adalimumab-atto
+    suffix_format: "4_lowercase_letters"
+
+# ─────────────────────────────────────────────
+# Drug Interaction Databases
+# ─────────────────────────────────────────────
+drug_interactions:
+  required_severity_checks:
+    - severity: "contraindicated"
+      action: block_dispense
+      override_allowed: false
+
+    - severity: "major"
+      action: alert_pharmacist
+      override_allowed: true
+      override_requires: "pharmacist_clinical_documentation"
+
+    - severity: "moderate"
+      action: soft_alert
+      override_allowed: true
+
+  approved_databases:
+    - First_Databank
+    - Multum
+    - Gold_Standard_Drug_Database
+    - Micromedex
+
+  cyp450_monitoring:
+    cyp3a4_inhibitors: alert_for_narrow_therapeutic_index_substrates
+    cyp2d6_poor_metabolizers: genotype_based_dosing_if_available
+
+# ─────────────────────────────────────────────
+# Black Box Warnings
+# 21 CFR § 201.57(c)(1)
+# ─────────────────────────────────────────────
+black_box_warnings:
+  formulary_handling:
+    must_display_warning_text_in_formulary_materials: true
+    pa_or_monitoring_requirement_recommended: true
+    prior_auth_may_be_required: true
+
+  notable_categories:
+    - opioids_addiction_abuse_overdose
+    - antidepressants_suicidality_pediatric
+    - antipsychotics_elderly_dementia_mortality
+    - fluoroquinolones_tendinopathy_aortic_aneurysm
+    - bisphosphonates_atypical_fracture
+    - calcineurin_inhibitors_lymphoma_risk
+
+# ─────────────────────────────────────────────
+# 340B Drug Pricing Program
+# PHSA § 340B
+# ─────────────────────────────────────────────
+b340:
+  eligible_entities:
+    - disproportionate_share_hospitals
+    - federally_qualified_health_centers
+    - ryan_white_clinics
+    - children_hospitals
+
+  formulary_constraint:
+    340b_drugs_not_eligible_for_manufacturer_rebates: true
+    duplicate_discount_prohibited: true
+    contract_pharmacy_arrangements_allowed: true
+    split_billing_required_for_mixed_populations: true
+
+# ─────────────────────────────────────────────
+# AI / Agent Constraints
+# ─────────────────────────────────────────────
+ai_constraints:
+  allowed_operations:
+    - validate_ndc_against_fda_database
+    - check_rems_compliance_status
+    - flag_controlled_substance_prescribing_anomalies
+    - detect_drug_interaction_severity_1_2
+    - suggest_a_rated_generic_equivalents
+    - flag_biosimilar_interchangeability_status
+    - alert_on_black_box_warning_dispensing_patterns
+
+  prohibited_operations:
+    - autonomous_refusal_to_dispense_schedule_ii
+    - modify_rems_patient_registry_entries
+    - override_dea_registration_check
+    - classify_a_new_drug_substance_on_schedule
+    - determine_ndc_exclusion_status_without_oig_database_check
+
+  human_oversight_required_for:
+    - rems_program_enrollment_decisions
+    - schedule_ii_early_refill_override
+    - 340b_eligibility_determination
+    - drug_interaction_override_documentation
+    - biosimilar_auto_substitution_opt_out_processing

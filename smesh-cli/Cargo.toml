@@ -15,12 +15,14 @@ smesh-agent = { path = "../smesh-agent" }
 smesh-bounty = { path = "../smesh-bounty" }
 tokio = { workspace = true }
 futures = { workspace = true }
+rand = { workspace = true }
 clap = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
+serde_yaml = "0.9"
 chrono = { workspace = true }
 sha2 = { workspace = true }
 regex = "1"

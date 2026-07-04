@@ -17,6 +17,20 @@ use smesh_core::{Network, NetworkTopology, Signal, SignalType};
 
 const SHOWCASE_HTML: &str = include_str!("assets/showcase.html");
 
+/// Pre-generated narration clips (ElevenLabs), embedded for glitch-free playback.
+const AUDIO: &[(&str, &[u8])] = &[
+    ("s1_intro", include_bytes!("assets/audio/s1_intro.mp3")),
+    ("s2_inspiration", include_bytes!("assets/audio/s2_inspiration.mp3")),
+    ("s3_consensus", include_bytes!("assets/audio/s3_consensus.mp3")),
+    ("s4_resilience", include_bytes!("assets/audio/s4_resilience.mp3")),
+    ("s5_rulebook", include_bytes!("assets/audio/s5_rulebook.mp3")),
+    ("s6_combination", include_bytes!("assets/audio/s6_combination.mp3")),
+    ("s7_claim", include_bytes!("assets/audio/s7_claim.mp3")),
+    ("s8_chain", include_bytes!("assets/audio/s8_chain.mp3")),
+    ("s9_gate", include_bytes!("assets/audio/s9_gate.mp3")),
+    ("s10_close", include_bytes!("assets/audio/s10_close.mp3")),
+];
+
 /// Serve the showcase on the given port.
 pub fn serve(port: u16) -> anyhow::Result<()> {
     let addr = format!("127.0.0.1:{port}");
@@ -76,10 +90,27 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
     }
     let body_str = String::from_utf8_lossy(&body);
 
+    // Binary audio route (narration clips).
+    if method == "GET" {
+        if let Some(id) = path.strip_prefix("/audio/").and_then(|p| p.strip_suffix(".mp3")) {
+            if let Some((_, bytes)) = AUDIO.iter().find(|(name, _)| *name == id) {
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\nContent-Length: {}\r\nAccept-Ranges: none\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+                    bytes.len()
+                );
+                stream.write_all(header.as_bytes())?;
+                stream.write_all(bytes)?;
+                return stream.flush();
+            }
+        }
+    }
+
     // Route.
     let (status, ctype, payload): (&str, &str, String) = match (method.as_str(), path.as_str()) {
         ("POST", "/api/diffuse") => ("200 OK", "application/json", api_diffuse(&body_str)),
         ("POST", "/api/consensus") => ("200 OK", "application/json", api_consensus(&body_str)),
+        ("POST", "/api/chaos") => ("200 OK", "application/json", api_chaos(&body_str)),
+        ("POST", "/api/adjudicate") => ("200 OK", "application/json", api_adjudicate(&body_str)),
         ("GET", "/api/owasp") => ("200 OK", "application/json", api_owasp()),
         ("GET", "/") | ("GET", "/index.html") => {
             ("200 OK", "text/html; charset=utf-8", SHOWCASE_HTML.to_string())
@@ -274,6 +305,59 @@ fn infer_task_type(text: &str) -> (&'static str, &'static str) {
     } else {
         ("analysis", "Analysis")
     }
+}
+
+// ── Chaos endpoint (resilience, real engine) ────────────────────────────────
+
+fn api_chaos(body: &str) -> String {
+    use crate::resilience::scenario::{scenario_trace, Attack, ScenarioConfig};
+
+    let req: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
+    let attack = match req.get("attack").and_then(|v| v.as_str()).unwrap_or("node_failure") {
+        "eclipse" => Attack::Eclipse,
+        "partition" => Attack::Partition,
+        _ => Attack::NodeFailure,
+    };
+    let intensity = req
+        .get("intensity")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.2)
+        .clamp(0.0, 0.9);
+    let nodes = req
+        .get("nodes")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(52)
+        .clamp(6, 200) as usize;
+    let topology = parse_topology(req.get("topology").and_then(|v| v.as_str()).unwrap_or("small_world"));
+
+    let cfg = ScenarioConfig {
+        nodes,
+        topology,
+        ticks: 46,
+        trials: 1,
+    };
+    scenario_trace(attack, intensity, &cfg).to_string()
+}
+
+// ── Adjudication endpoint (AION-signed pharma claims) ───────────────────────
+
+fn api_adjudicate(body: &str) -> String {
+    use crate::adjudicate::{claim::sample_claims, engine::adjudicate, policy::load_all, report::adjudication_json};
+
+    let req: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
+    let idx = req.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+
+    let policies = load_all();
+    let claims = sample_claims();
+    let sel = idx.min(claims.len().saturating_sub(1));
+    let adj = adjudicate(&claims[sel], &policies);
+
+    let list: Vec<serde_json::Value> = claims
+        .iter()
+        .map(|c| json!({ "id": c.id, "drug": c.drug, "atc": c.atc }))
+        .collect();
+
+    json!({ "claims": list, "selected": adjudication_json(&adj) }).to_string()
 }
 
 // ── OWASP scorecard passthrough ─────────────────────────────────────────────

@@ -1,0 +1,72 @@
+[
+  {
+    "id": "s1_intro",
+    "tab": "live", "action": "title",
+    "title": "Meet SMESH",
+    "caption": "A new way to make regulated decisions — inspired by nature.",
+    "text": "Every day, life-changing decisions are made about medicine and coverage. What if they could be faster, fairer, and fully provable — made by a system inspired by nature itself? This is SMESH."
+  },
+  {
+    "id": "s2_inspiration",
+    "tab": "live", "action": "diffuse",
+    "title": "Inspired by forests",
+    "caption": "Beneath every forest, trees share signals through a living network — no tree in charge.",
+    "text": "SMESH is inspired by forests. Beneath the ground, a network of fungal threads — nicknamed the wood wide web — lets trees share signals and warnings. No single tree is in charge. Signals spread outward, fade over time, and grow stronger when many trees agree. Watch one move through the network."
+  },
+  {
+    "id": "s3_consensus",
+    "tab": "live", "action": "consensus",
+    "title": "Agreement, without a boss",
+    "caption": "Many small specialists weigh in and reach agreement on their own.",
+    "text": "SMESH gives that same ability to artificial intelligence. Instead of one large model deciding everything, many small specialists each weigh in. They reach agreement on their own — no central controller — exactly like the forest."
+  },
+  {
+    "id": "s4_resilience",
+    "tab": "live", "action": "chaos",
+    "title": "No single point of failure",
+    "caption": "Knock out parts of the network — even hostile ones — and it routes around the damage.",
+    "text": "And because no single part is in charge, there is no single point of failure. Even if pieces of the network go down, or turn hostile, the system keeps working. It simply routes around the damage."
+  },
+  {
+    "id": "s5_rulebook",
+    "tab": "adjud", "action": "show_policy",
+    "title": "The signed rulebook: AION",
+    "caption": "The real regulations — cryptographically signed, versioned, tamper-proof.",
+    "text": "But in a regulated industry, intelligence alone is not enough. Every decision must follow the rules, and prove it. That is where AION comes in — a tamper-proof, cryptographically signed rulebook. These are the real regulations: approved, versioned, and impossible to alter without detection."
+  },
+  {
+    "id": "s6_combination",
+    "tab": "adjud", "action": "hold",
+    "title": "Intelligence, meet compliance",
+    "caption": "The mesh decides. The signed rules govern what it's allowed to do.",
+    "text": "Here is the breakthrough. The mesh makes the decision. And the signed AION rules govern what it is allowed to do. Fast, decentralized intelligence — with built-in compliance, and a complete audit trail."
+  },
+  {
+    "id": "s7_claim",
+    "tab": "adjud", "action": "select_claim",
+    "title": "A real claim arrives",
+    "caption": "An expensive, off-label medication. Each specialist checks it against the signed policy.",
+    "text": "Let us watch it work. A real pharmacy claim arrives — an expensive medication, requested for an unapproved use. One by one, the specialists check it against the signed policy."
+  },
+  {
+    "id": "s8_chain",
+    "tab": "adjud", "action": "chain",
+    "title": "The decision chain",
+    "caption": "Formulary passes · prior auth needed · step therapy needed · coverage says deny.",
+    "text": "Follow the chain. The formulary check passes. Prior authorization is required. So is step therapy. And the coverage specialist recommends denial. The mesh reaches its conclusion: deny."
+  },
+  {
+    "id": "s9_gate",
+    "tab": "adjud", "action": "gate",
+    "title": "The safeguard",
+    "caption": "AION forbids the AI from denying coverage on its own → escalate to a human.",
+    "text": "But here is the safeguard. The signed policy forbids the AI from denying coverage on its own. So the instant the mesh reaches that conclusion, AION steps in, and escalates the case to a human pharmacist. The machine can recommend. Only a person can deny."
+  },
+  {
+    "id": "s10_close",
+    "tab": "adjud", "action": "hold",
+    "title": "Explainable, end to end",
+    "caption": "Decisions made like a forest. Governed like a regulation.",
+    "text": "Decisions made like a forest. Governed like a regulation. Fully explainable, from the claim to the outcome. That is SMESH, with AION."
+  }
+]

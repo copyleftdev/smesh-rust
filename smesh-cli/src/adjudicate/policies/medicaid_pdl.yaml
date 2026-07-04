@@ -1,0 +1,220 @@
+# State Medicaid Preferred Drug List (PDL) Rules
+# Regulatory Reference: 42 CFR § 447.518, Social Security Act § 1927
+# OBRA 90, ACA § 2501 (supplemental rebates)
+# Last Updated: 2026-05-08
+
+metadata:
+  organization: "State Medicaid Agency"
+  regulation: "42 CFR § 447.518"
+  statute: "Social Security Act § 1927"
+  compliance_framework: "OBRA_90"
+  review_cycle: "quarterly"
+
+# ─────────────────────────────────────────────
+# PDL Structure
+# ─────────────────────────────────────────────
+pdl_structure:
+  preferred_status:
+    cost_sharing: minimal
+    pa_required: false
+    description: "Drugs achieving best net price via supplemental rebate"
+
+  non_preferred_status:
+    cost_sharing: standard
+    pa_required: true
+    pa_override_allowed: true
+    description: "Available with PA; step to preferred brand encouraged"
+
+  excluded_drugs:
+    pa_required: true
+    note: "Must still be accessible via PA for medical necessity"
+
+  carve_outs:
+    - behavioral_health_drugs    # some states manage separately
+    - family_planning_drugs
+    - hiv_antiretrovirals        # often ADAP-managed
+
+# ─────────────────────────────────────────────
+# Therapeutic Categories and PA Triggers
+# ─────────────────────────────────────────────
+therapeutic_categories:
+
+  - category: proton_pump_inhibitors
+    preferred:
+      - omeprazole_generic
+      - pantoprazole_generic
+    step_required: true
+    step_sequence: ["preferred_generic", "non_preferred_generic", "brand"]
+    max_pa_response_hours: 24
+
+  - category: statins
+    preferred:
+      - atorvastatin_generic
+      - simvastatin_generic
+      - rosuvastatin_generic
+    step_required: true
+    step_sequence: ["preferred_generic", "non_preferred_generic"]
+    max_pa_response_hours: 24
+
+  - category: diabetes_type2_oral
+    preferred:
+      - metformin_generic
+    step_required: true
+    step_sequence: ["metformin", "sulfonylurea", "sglt2_or_glp1"]
+    sglt2_glp1_criteria:
+      - established_cardiovascular_disease
+      - chronic_kidney_disease
+      - hba1c_above_9_on_first_line
+    max_pa_response_hours: 24
+
+  - category: antidepressants_ssri
+    preferred:
+      - sertraline_generic
+      - fluoxetine_generic
+      - citalopram_generic
+    step_required: false   # protected class — no step therapy
+    pa_required: false
+    note: "SSRI protected; SNRI may require trial of preferred SSRI unless contraindicated"
+
+  - category: antipsychotics
+    preferred:
+      - haloperidol_generic
+      - olanzapine_generic
+      - quetiapine_generic
+      - risperidone_generic
+      - aripiprazole_generic
+    pa_for_non_preferred: true
+    step_required: false   # protected class
+    clozapine_requirements:
+      rems_enrollment: true
+      anc_monitoring: true
+
+  - category: antiretrovirals
+    step_required: false
+    pa_required: false
+    quantity_limit_allowed: false
+    dispensing_restriction: "specialty_pharmacy_only"
+
+  - category: biologic_inflammatory
+    step_sequence: ["conventional_dmards_6mo", "biologic"]
+    conventional_dmards:
+      - methotrexate
+      - hydroxychloroquine
+      - sulfasalazine
+    pa_required: true
+    biosimilar_substitution:
+      preferred: true
+      automatic: true
+      patient_consent: false  # pharmacist may substitute unless physician opt-out
+    max_pa_response_hours: 72
+
+# ─────────────────────────────────────────────
+# Rebate Requirements
+# Social Security Act § 1927(c)
+# ─────────────────────────────────────────────
+rebates:
+  basic_rebate:
+    unit_rebate_amount_formula: "AMP_based"
+    minimum_rebate_percentage_brand: 0.2325  # 23.25% of AMP (2026)
+    minimum_rebate_percentage_generic: 0.13
+
+  inflation_rebate:
+    applies_when: "price_increase_exceeds_cpi_u"
+    reference_date: "2003-01-01"
+    calculation: "(current_amp - baseline_amp_cpi_adjusted) * units_sold"
+
+  supplemental_rebates:
+    allowed: true
+    requires_cms_approval: false
+    must_not_exceed_net_price: true
+    state_retains_percentage: 0.40  # states keep 40% of supplement after FMAP
+
+  best_price:
+    definition: "lowest price available to any customer net of all discounts"
+    exclusions:
+      - 340b_covered_entities
+      - federal_supply_schedule
+      - depot_prices
+    reporting_period: "quarterly"
+
+# ─────────────────────────────────────────────
+# Prior Authorization Process
+# ─────────────────────────────────────────────
+prior_authorization:
+  standard_response_hours: 24
+  expedited_response_hours: 3   # life-threatening or urgent
+  emergency_supply:
+    days: 3
+    cost_share: "none"
+
+  criteria_requirements:
+    must_be_evidence_based: true
+    must_be_publicly_available: true
+    cms_review_required: false   # but state plan amendment may require CMS approval
+
+  auto_approve_conditions:
+    - "prescriber_attestation_of_medical_necessity_with_clinical_notes"
+    - "patient_previously_stable_on_drug_per_refill_history"
+
+  appeals:
+    internal_first_level_days: 2
+    fair_hearing_right: true
+    fair_hearing_days: 90
+
+# ─────────────────────────────────────────────
+# Dual Eligibles (Medicare-Medicaid)
+# ─────────────────────────────────────────────
+dual_eligibles:
+  coordination_of_benefits:
+    medicare_primary: true
+    medicaid_wraps_cost_sharing: true
+
+  low_income_subsidy:
+    copay_cap_generic_cents: 0
+    copay_cap_brand_cents: 0     # full LIS (extra help) beneficiaries
+    applicable_enrollment: "full_benefit_dual"
+
+  clawback_policy:
+    state_pays_cms_portion: true
+    phaseout_year: null   # ongoing
+
+# ─────────────────────────────────────────────
+# Data & Reporting
+# ─────────────────────────────────────────────
+reporting:
+  drug_utilization_review:
+    retrospective: true
+    prospective: true   # real-time point-of-sale DUR
+    required_edits:
+      - drug_drug_interaction
+      - drug_age_contraindication
+      - drug_pregnancy_contraindication
+      - refill_too_soon
+      - duplicate_therapy
+
+  drug_utilization_reporting:
+    frequency: "quarterly"
+    submitted_to: "CMS_MSIS"
+
+# ─────────────────────────────────────────────
+# AI / Agent Constraints
+# ─────────────────────────────────────────────
+ai_constraints:
+  allowed_operations:
+    - recommend_pdl_tier_placement
+    - flag_rebate_calculation_anomalies
+    - generate_pa_criteria_drafts_for_human_review
+    - identify_therapeutic_substitution_opportunities
+    - detect_step_therapy_violations_for_protected_classes
+
+  prohibited_operations:
+    - autonomous_pa_denial
+    - automatic_step_therapy_for_antidepressants_antipsychotics
+    - modify_rebate_calculations_without_actuary_review
+    - access_beneficiary_phi_without_minimum_necessary_check
+
+  human_oversight_required_for:
+    - pdl_annual_review_and_publication
+    - state_plan_amendment_submissions
+    - fair_hearing_decisions
+    - rebate_dispute_resolution

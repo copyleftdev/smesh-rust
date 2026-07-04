@@ -1,0 +1,34 @@
+[
+  {
+    "policy": "cms_part_d",
+    "name": "CMS Medicare Part D",
+    "aion_file": "cms_part_d.aion",
+    "author_id": 91001,
+    "verified": true,
+    "sha256": "1059bafa800b59c54cbcb0e1498aa716556f86c163ceafbb568a65a01a0581a1"
+  },
+  {
+    "policy": "medicaid_pdl",
+    "name": "Medicaid PDL",
+    "aion_file": "medicaid_pdl.aion",
+    "author_id": 91002,
+    "verified": true,
+    "sha256": "078e2c175f6ada904ef265cdf16a604fc7544a3032b532ee67ae997707369375"
+  },
+  {
+    "policy": "commercial_pbm",
+    "name": "Commercial PBM",
+    "aion_file": "commercial_pbm.aion",
+    "author_id": 91003,
+    "verified": true,
+    "sha256": "12fa21ad864bdd4d33033df57606d9919165e2232d5cdce2a98f02b0a7056d83"
+  },
+  {
+    "policy": "fda_21cfr",
+    "name": "FDA 21 CFR",
+    "aion_file": "fda_21cfr.aion",
+    "author_id": 91004,
+    "verified": true,
+    "sha256": "ff2fdaf15c490da371bfaa0975df0321622634aae8e9c13423f28a7bb0789ce4"
+  }
+]

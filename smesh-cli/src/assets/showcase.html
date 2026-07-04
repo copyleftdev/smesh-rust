@@ -87,6 +87,63 @@
   .yg{color:var(--green)} .yb{color:var(--red)}
   .bcard svg{width:100%;height:auto}
   .empty{font-family:var(--mono);font-size:13px;color:var(--text2);text-align:center;padding:60px 0}
+
+  /* ── Regulatory Decisions tab ── */
+  #tab-adjud{display:flex;flex-direction:column}
+  .adjud-controls{display:flex;align-items:center;gap:14px;padding:14px 20px;border-bottom:1px solid var(--border);background:var(--surface);flex:none}
+  .adjud-controls select{font-family:var(--mono);font-size:13px;color:var(--text);background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px 12px;cursor:pointer;min-width:280px;outline:none}
+  .adjud-layout{flex:1;display:flex;min-height:0}
+  #adjud-canvas{flex:1;height:100%;display:block;min-width:0}
+  #adjud-audit{width:min(46%,500px);border-left:1px solid var(--border);background:var(--surface);overflow-y:auto;padding:22px 22px 32px}
+  @media (max-width:860px){.adjud-layout{flex-direction:column}#adjud-audit{width:100%;border-left:none;border-top:1px solid var(--border)}}
+
+  /* outcome header */
+  .dc-outcome{display:flex;align-items:center;gap:12px;margin-bottom:6px}
+  .aud-badge{font-family:var(--mono);font-size:15px;font-weight:700;padding:8px 14px;border-radius:8px;border:1px solid;letter-spacing:.04em}
+  .dc-sub{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin-bottom:20px}
+
+  /* the decision chain */
+  .chain{position:relative}
+  .cstep{display:flex;gap:14px;opacity:0;transform:translateY(8px);animation:crise .45s var(--ease) forwards;animation-delay:calc(var(--i)*80ms)}
+  .crail{position:relative;width:16px;flex:none;display:flex;justify-content:center}
+  .crail::before{content:'';position:absolute;top:14px;bottom:-6px;width:2px;background:var(--border)}
+  .cstep:last-child .crail::before{display:none}
+  .cnode{position:relative;width:14px;height:14px;border-radius:50%;margin-top:3px;box-shadow:0 0 0 3px var(--surface);z-index:1}
+  .cnode.gate{border-radius:3px;transform:rotate(45deg)}
+  .cnode.big{width:18px;height:18px;margin-top:1px}
+  .cbody{flex:1;padding-bottom:20px;min-width:0}
+  .ckind{font-family:var(--mono);font-size:9px;letter-spacing:.11em;text-transform:uppercase;color:var(--dim)}
+  .ctitle{font-size:14px;font-weight:600;margin:2px 0}
+  .cdisp{font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:.03em}
+  .cmeta{font-family:var(--mono);font-size:10px;color:var(--mut);margin-top:2px}
+  .cmeta .ok{color:var(--green)}
+  .creason{color:var(--text2);font-size:12.5px;line-height:1.45;margin-top:3px}
+  .ccite{font-family:var(--mono);font-size:10px;color:var(--dim);margin-top:4px;word-break:break-word}
+  .cgate{background:#38bdf812;border:1px solid #38bdf83a;border-radius:8px;padding:9px 11px;margin-top:5px}
+  .cgate .gc{font-family:var(--mono);font-size:10.5px;color:#7fd3f5;line-height:1.5}
+  .cfinal{font-size:15px;font-weight:700}
+  @keyframes crise{to{opacity:1;transform:none}}
+
+  /* ── Guided tour ── */
+  .tourbtn{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#06060c;background:var(--accent);border:none;padding:8px 15px;border-radius:8px;cursor:pointer;font-weight:700;transition:transform .15s var(--ease),box-shadow .2s}
+  .tourbtn:hover{transform:translateY(-1px);box-shadow:0 6px 20px var(--glow)}
+  #tour{position:fixed;inset:0;z-index:50;pointer-events:none;display:flex;align-items:flex-end;justify-content:center;padding:0 24px 34px}
+  #tour.tour-hidden{display:none}
+  .tour-caption{pointer-events:auto;width:min(720px,92vw);background:rgba(10,10,18,.82);backdrop-filter:blur(16px);border:1px solid #2a2f45;border-radius:16px;padding:20px 24px;box-shadow:0 20px 60px rgba(0,0,0,.55);animation:tcin .5s var(--ease)}
+  @keyframes tcin{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+  .tc-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+  .tc-step{font-family:var(--mono);font-size:11px;color:var(--mut)}
+  .tc-badge{font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);border:1px solid #2a3a58;border-radius:20px;padding:3px 10px}
+  .tc-title{font-size:22px;font-weight:700;letter-spacing:-.01em;margin-bottom:5px}
+  .tc-body{font-size:15px;line-height:1.5;color:#c9cede}
+  .tc-bar{height:3px;background:#242a3d;border-radius:3px;margin:16px 0 12px;overflow:hidden}
+  #tc-fill{height:100%;width:0;background:var(--accent);border-radius:3px;transition:width .2s linear}
+  .tc-ctrl{display:flex;align-items:center;gap:8px}
+  .tc-ctrl button{background:#171a26;border:1px solid #2a2f45;color:var(--text);width:38px;height:34px;border-radius:9px;cursor:pointer;font-size:16px;transition:background .15s}
+  .tc-ctrl button:hover{background:#222738}
+  #tc-play{background:var(--accent);color:#06060c;border-color:var(--accent);font-weight:700}
+  .tc-flex{flex:1}
+  .tc-exit{width:auto!important;padding:0 14px;font-family:var(--mono);font-size:11px;letter-spacing:.04em;color:var(--mut)!important}
 </style>
 </head>
 <body>
@@ -95,9 +152,11 @@
     <div class="brand">SMESH<span class="dot">·</span>MESH</div>
     <div class="tabs">
       <button class="tab active" data-tab="live">◈ Live Mesh</button>
+      <button class="tab" data-tab="adjud">⚕ Regulatory Decisions</button>
       <button class="tab" data-tab="bench">▚ OWASP Benchmark</button>
     </div>
     <div class="spacer"></div>
+    <button id="start-tour" class="tourbtn">▶ Guided Tour</button>
     <div class="hint">real engine · signals decay, diffuse &amp; reinforce</div>
   </header>
 
@@ -109,8 +168,9 @@
         <div class="seg" id="mode-seg">
           <button class="on" data-mode="diffuse">◇ Diffuse</button>
           <button data-mode="consensus">◈ Consensus</button>
+          <button data-mode="chaos">✷ Chaos</button>
         </div>
-        <div class="field">
+        <div class="field" id="txt-field">
           <input id="txt" type="text" placeholder="type a signal to inject into the mesh…" value="need code review on the auth module">
         </div>
         <div class="diffuse-only" id="diffuse-ctl">
@@ -128,6 +188,17 @@
             <option value="80">80 nodes</option>
             <option value="120">120 nodes</option>
           </select>
+        </div>
+        <div class="diffuse-only" id="chaos-ctl" style="display:none">
+          <select id="atk">
+            <option value="node_failure">node failure</option>
+            <option value="eclipse">eclipse attack</option>
+            <option value="partition">partition + heal</option>
+          </select>
+          <div class="field" style="padding:0 10px;gap:8px">
+            <span class="hint" style="white-space:nowrap">attack <b id="atklbl" style="color:#f87171">20%</b></span>
+            <input id="intensity" type="range" min="0" max="80" value="20" style="width:150px;accent-color:#f87171">
+          </div>
         </div>
         <button class="run" id="run">Inject ▸</button>
       </div>
@@ -149,7 +220,38 @@
         <div class="empty" id="bench-empty">Loading OWASP scorecard…</div>
       </div>
     </section>
+
+    <!-- REGULATORY DECISIONS -->
+    <section id="tab-adjud" class="panel">
+      <div class="adjud-controls">
+        <span class="hint" style="letter-spacing:.06em">INCOMING CLAIM</span>
+        <select id="claim-sel"></select>
+        <span class="hint" id="adjud-flag">signed AION formulary policy · mesh consensus · governance-gated</span>
+      </div>
+      <div class="adjud-layout">
+        <canvas id="adjud-canvas"></canvas>
+        <div id="adjud-audit"><div class="empty">Loading claims…</div></div>
+      </div>
+    </section>
   </main>
+
+  <!-- GUIDED TOUR overlay -->
+  <div id="tour" class="tour-hidden">
+    <div class="tour-caption">
+      <div class="tc-top"><span class="tc-step" id="tc-step">1 / 10</span><span class="tc-badge">◈ narrated tour</span></div>
+      <div class="tc-title" id="tc-title"></div>
+      <div class="tc-body" id="tc-body"></div>
+      <div class="tc-bar"><div id="tc-fill"></div></div>
+      <div class="tc-ctrl">
+        <button id="tc-prev" title="previous">‹</button>
+        <button id="tc-play" title="play/pause">⏸</button>
+        <button id="tc-next" title="next">›</button>
+        <div class="tc-flex"></div>
+        <button id="tc-exit" class="tc-exit">✕ Exit tour</button>
+      </div>
+    </div>
+    <audio id="tour-audio" preload="auto"></audio>
+  </div>
 </div>
 
 <script>
@@ -164,7 +266,9 @@ document.querySelectorAll('.tab').forEach(t=>{
     const which=t.dataset.tab;
     $('#tab-live').classList.toggle('active',which==='live');
     $('#tab-bench').classList.toggle('active',which==='bench');
+    $('#tab-adjud').classList.toggle('active',which==='adjud');
     if(which==='bench') loadBench();
+    if(which==='adjud') loadAdjud();
   };
 });
 
@@ -211,6 +315,10 @@ function layout(ids, edges){
       P[a].vx-=ux*f;P[a].vy-=uy*f;P[b].vx+=ux*f;P[b].vy+=uy*f;
     }
     for(let i=0;i<n;i++){
+      // gentle gravity keeps disconnected nodes (e.g. failed/eclipsed) from
+      // drifting to infinity, so the graph stays compact and balanced.
+      P[i].vx+=(cxp-P[i].x)*0.03;
+      P[i].vy+=(cyp-P[i].y)*0.03;
       let d=Math.hypot(P[i].vx,P[i].vy)||.01;
       P[i].x+=P[i].vx/d*Math.min(d,temp);
       P[i].y+=P[i].vy/d*Math.min(d,temp);
@@ -269,10 +377,28 @@ function roleColor(role){
   return role==='Coder'?'#4d8fec':role==='Reviewer'?'#c792ea':role==='Analyst'?'#34d399':'#e8a030';
 }
 
+// ─────────────────────────────────────────── run: chaos (resilience)
+async function runChaos(){
+  const body={attack:$('#atk').value, intensity:(+$('#intensity').value)/100, nodes:+$('#nodes').value, topology:$('#topo').value};
+  const r=await fetch('/api/chaos',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const d=await r.json();
+  G={ids:d.nodes,edges:d.edges,origins:[d.origin],pos:layout(d.nodes,d.edges),
+     victims:new Set(d.victims), fidelity:d.fidelity, attack:body.attack};
+  TRACE=d.frames; frames=d.frames.length; head=0; play=true; particles=[]; edgeGlow={};
+  G.adj={}; d.nodes.forEach(id=>G.adj[id]=[]); d.edges.forEach(([a,b])=>{G.adj[a].push(b);G.adj[b].push(a);});
+  G.prevReached=new Set([d.origin]);
+  showTimeline(true);
+}
+
 // ─────────────────────────────────────────── run button
 async function run(){
   if(busy) return; busy=true; $('#run').disabled=true; toast('running mesh…');
-  try{ MODE==='diffuse'?await runDiffuse():await runConsensus(); toast(''); }
+  try{
+    if(MODE==='diffuse') await runDiffuse();
+    else if(MODE==='consensus') await runConsensus();
+    else await runChaos();
+    toast('');
+  }
   catch(e){ toast('engine error: '+e.message); }
   busy=false; $('#run').disabled=false;
 }
@@ -284,10 +410,22 @@ $('#mode-seg').querySelectorAll('button').forEach(b=>{
   b.onclick=()=>{
     MODE=b.dataset.mode;
     $('#mode-seg').querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
-    $('#diffuse-ctl').style.display=MODE==='diffuse'?'flex':'none';
+    $('#diffuse-ctl').style.display=(MODE==='diffuse'||MODE==='chaos')?'flex':'none';
+    $('#chaos-ctl').style.display=MODE==='chaos'?'flex':'none';
+    $('#txt-field').style.display=(MODE==='diffuse'||MODE==='consensus')?'flex':'none';
+    $('#run').textContent=MODE==='chaos'?'Attack ▸':(MODE==='consensus'?'Settle ▸':'Inject ▸');
     TRACE=null; showTimeline(false); renderLegend();
   };
 });
+
+// chaos controls: live re-run as the attack slider / type changes
+let chaosTimer=null;
+$('#intensity').addEventListener('input',e=>{
+  $('#atklbl').textContent=e.target.value+'%';
+  if(MODE!=='chaos') return;
+  clearTimeout(chaosTimer); chaosTimer=setTimeout(run,240);
+});
+$('#atk').addEventListener('change',()=>{ if(MODE==='chaos') run(); });
 
 // ─────────────────────────────────────────── timeline
 function showTimeline(on){
@@ -363,7 +501,7 @@ function frame(now){
 
   // advance playhead (diffuse loops so the spread stays visible; consensus holds on the winner)
   if(play){
-    if(MODE==='diffuse'){
+    if(MODE!=='consensus'){
       head+=dt*8;
       if(head>frames-1+10){ head=0; particles=[]; edgeGlow={}; lastRound=-1; if(G) G.prevReached=new Set(G.origins); }
     }else{
@@ -386,7 +524,7 @@ function frame(now){
     edgeGlow[ekey(a,b)]=g*.94;
   }
 
-  if(MODE==='diffuse'){ drawDiffuse(fi); } else { drawConsensus(fi); }
+  if(MODE==='consensus'){ drawConsensus(fi); } else { drawDiffuse(fi); }
 
   // particles (pulses)
   for(let i=particles.length-1;i>=0;i--){
@@ -411,6 +549,11 @@ function drawDiffuse(fi){
   const now=performance.now()*.004;
   for(let i=0;i<G.ids.length;i++){
     const id=G.ids[i], p=G.pos[id]; if(!p) continue;
+    if(G.victims && G.victims.has(id)){    // failed / eclipsed node
+      cx.beginPath(); cx.arc(p.x,p.y,4,0,7); cx.fillStyle='#4a1521'; cx.fill();
+      cx.beginPath(); cx.arc(p.x,p.y,6.5,0,7); cx.strokeStyle='rgba(248,113,113,.65)'; cx.lineWidth=1.2; cx.stroke();
+      continue;
+    }
     const l=lv[id]||0;                 // 0..1 intensity
     const reached=l>0.001;
     const isOrigin=G.origins.includes(id);
@@ -467,7 +610,14 @@ function lerpCol(a,b,t){return [a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t,a[2]+(b[2]
 // ─────────────────────────────────────────── HUD + legend
 function updateHUD(fi){
   const hud=$('#hud'); let html='';
-  if(MODE==='diffuse'){
+  if(MODE==='chaos'){
+    const N=G.ids.length, vict=G.victims?G.victims.size:0;
+    const {lv}=nodeLevels(fi); const reached=Object.keys(lv).length;
+    const fid=Math.round((G.fidelity||0)*100); const fcol=fid<50?'#f87171':'#34d399';
+    html=stat('attack',(G.attack||'').replace(/_/g,' '))+stat('down',vict+' <small>/'+N+'</small>')
+        +stat('reached',reached)
+        +`<div class="stat"><div class="k">fidelity</div><div class="v" style="color:${fcol}">${fid}<small>%</small></div></div>`;
+  }else if(MODE==='diffuse'){
     const fr=TRACE[Math.min(fi,TRACE.length-1)]; const {lv}=nodeLevels(fi);
     const reached=Object.keys(lv).length; const N=G.ids.length;
     let maxInt=0,maxHops=0; for(const s of fr.signals){maxInt=Math.max(maxInt,s.intensity);maxHops=Math.max(maxHops,s.hops);}
@@ -486,7 +636,13 @@ function stat(k,v){return `<div class="stat"><div class="k">${k}</div><div class
 
 function renderLegend(){
   const l=$('#legend');
-  if(MODE==='diffuse'){
+  if(MODE==='chaos'){
+    l.innerHTML=`<b>Chaos — resilience</b>
+      <div class="row"><span class="sw" style="background:#e8a030"></span>origin</div>
+      <div class="row"><span class="sw" style="background:#4d8fec"></span>honest · reached</div>
+      <div class="row"><span class="sw" style="background:#f87171"></span>failed / eclipsed</div>
+      <div class="row" style="margin-top:6px;color:var(--dim)">drag the attack slider — watch consensus fragment</div>`;
+  }else if(MODE==='diffuse'){
     l.innerHTML=`<b>Signal diffusion</b>
       <div class="row"><span class="sw" style="background:#e8a030"></span>origin (injection point)</div>
       <div class="row"><span class="sw" style="background:#4d8fec"></span>reached · size = intensity</div>
@@ -501,6 +657,134 @@ function renderLegend(){
   }
 }
 renderLegend();
+
+// ─────────────────────────────────────────── Regulatory Decisions tab
+const ac=$('#adjud-canvas'), acx=ac.getContext('2d');
+let aW=0,aH=0, ADJ=null, ADJN=null, ADJp=[], ADJf=0, adjLoaded=false;
+
+function adjResize(){
+  aW=ac.clientWidth; aH=ac.clientHeight;
+  ac.width=aW*DPR; ac.height=aH*DPR; acx.setTransform(DPR,0,0,DPR,0,0);
+  if(ADJ) layoutAdj();
+}
+new ResizeObserver(adjResize).observe(ac);
+
+function layoutAdj(){
+  if(!ADJ||aW<10) return;
+  const cx0=aW/2, n=ADJ.findings.length;
+  ADJN={
+    claim:{x:cx0,y:66,r:22,col:'#4d8fec'},
+    agents:ADJ.findings.map((f,i)=>({
+      x:cx0+(i-(n-1)/2)*Math.min(aW/(n+0.6),200), y:aH*0.42, r:15, label:f.agent, disp:f.disposition, col:f.color
+    })),
+    gate:{x:cx0,y:aH*0.66,r:17,gated:!!ADJ.gating_constraint},
+    decision:{x:cx0,y:aH*0.88,r:24,label:ADJ.decision_label,col:ADJ.decision_color},
+  };
+}
+
+function adjEdge(a,b,al){ acx.beginPath(); acx.moveTo(a.x,a.y); acx.lineTo(b.x,b.y); acx.strokeStyle=`rgba(122,122,150,${al})`; acx.lineWidth=1; acx.stroke(); }
+function mkP(o,d,col){ return {o,d,t:0,spd:.018+Math.random()*.012,col}; }
+
+function adjDraw(){
+  requestAnimationFrame(adjDraw);
+  if(!$('#tab-adjud').classList.contains('active')||!ADJ||!ADJN) return;
+  ADJf++;
+  acx.clearRect(0,0,aW,aH);
+  for(const s of stars){ s.tw+=.02; acx.beginPath(); acx.arc(s.x*aW,s.y*aH,s.r,0,7); acx.fillStyle=`rgba(150,170,210,${s.a*(.5+Math.sin(s.tw)*.4)})`; acx.fill(); }
+  const C=ADJN.claim, G=ADJN.gate, D=ADJN.decision;
+  for(const a of ADJN.agents){ adjEdge(C,a,.09); adjEdge(a,G,.09); }
+  adjEdge(G,D,.14);
+  if(ADJf%16===0){ const a=ADJN.agents[Math.floor(Math.random()*ADJN.agents.length)]; ADJp.push(mkP(C,a,'#4d8fec')); ADJp.push(mkP(a,G,a.col)); }
+  if(ADJf%24===0){ ADJp.push(mkP(G,D, G.gated?'#38bdf8':D.col)); }
+  for(let i=ADJp.length-1;i>=0;i--){ const p=ADJp[i]; p.t+=p.spd; if(p.t>=1){ADJp.splice(i,1);continue;}
+    const x=bz(p.o.x,(p.o.x+p.d.x)/2,p.d.x,p.t), y=bz(p.o.y,(p.o.y+p.d.y)/2,p.d.y,p.t);
+    acx.beginPath(); acx.arc(x,y,3,0,7); acx.fillStyle=p.col; acx.shadowColor=p.col; acx.shadowBlur=10; acx.fill(); acx.shadowBlur=0;
+  }
+  const now=performance.now()*.004;
+  // claim node
+  adjCircle(C.x,C.y,C.r+Math.sin(now)*1.5,C.col,.14); acx.fillStyle='#e4e4ed'; acx.font='600 11px var(--mono),monospace'; acx.textAlign='center';
+  acx.fillText(ADJ.claim.id,C.x,C.y+4); acx.fillStyle='#9aa3b2'; acx.font='11px sans-serif'; acx.fillText(ADJ.claim.drug,C.x,C.y-C.r-8);
+  // agent nodes
+  for(const a of ADJN.agents){ adjCircle(a.x,a.y,a.r+Math.sin(now*2+a.x)*1,a.col,.9);
+    acx.fillStyle='#c9cede'; acx.font='600 11px sans-serif'; acx.textAlign='center'; acx.fillText(a.label,a.x,a.y-a.r-7);
+    acx.fillStyle=a.col; acx.font='600 9px var(--mono),monospace'; acx.fillText(a.disp,a.x,a.y+a.r+13);
+  }
+  // AION gate (diamond)
+  const gg=G.gated?(.6+Math.sin(now*3)*.4):.2; acx.save(); acx.translate(G.x,G.y); acx.rotate(Math.PI/4);
+  acx.beginPath(); acx.rect(-G.r,-G.r,G.r*2,G.r*2); acx.fillStyle='#0d0d16'; acx.strokeStyle='#38bdf8'; acx.lineWidth=2; acx.shadowColor='#38bdf8'; acx.shadowBlur=G.gated?18*gg:5; acx.fill(); acx.stroke(); acx.restore(); acx.shadowBlur=0;
+  acx.fillStyle='#38bdf8'; acx.font='600 9px var(--mono),monospace'; acx.textAlign='center'; acx.fillText('AION GATE',G.x,G.y+G.r+16);
+  // decision node
+  adjCircle(D.x,D.y,D.r+Math.sin(now*1.5)*2,D.col,1); acx.strokeStyle=D.col; acx.lineWidth=2; acx.shadowColor=D.col; acx.shadowBlur=16; acx.beginPath(); acx.arc(D.x,D.y,D.r+5,0,7); acx.stroke(); acx.shadowBlur=0;
+  acx.fillStyle='#06060c'; acx.font='700 12px var(--mono),monospace'; acx.textAlign='center'; acx.fillText('DECISION',D.x,D.y+4);
+  acx.fillStyle=D.col; acx.font='700 13px var(--mono),monospace'; acx.fillText(ADJ.decision_label,D.x,D.y+D.r+22);
+}
+function adjCircle(x,y,r,col,al){ acx.beginPath(); acx.arc(x,y,r,0,7); acx.fillStyle=col; acx.globalAlpha=al; acx.shadowColor=col; acx.shadowBlur=10; acx.fill(); acx.globalAlpha=1; acx.shadowBlur=0; }
+
+async function postAdjud(i){ const r=await fetch('/api/adjudicate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({index:i})}); return r.json(); }
+function applyAdj(s){ ADJ=s; layoutAdj(); ADJp=[]; renderAudit(s); }
+async function loadAdjud(){
+  adjResize();
+  if(adjLoaded) return;
+  try{
+    const d=await postAdjud(0);
+    const sel=$('#claim-sel');
+    sel.innerHTML=d.claims.map((c,i)=>`<option value="${i}">${c.id} · ${c.drug} (${c.atc})</option>`).join('');
+    sel.onchange=async()=>{ const dd=await postAdjud(+sel.value); applyAdj(dd.selected); };
+    applyAdj(d.selected); adjLoaded=true;
+  }catch(e){ $('#adjud-audit').innerHTML=`<div class="empty">engine error: ${e.message}</div>`; }
+}
+function renderAudit(s){
+  const p=s.policy;
+  const sev={APPROVE:0,FLAG:1,PEND:2,DENY:3};
+  const worst=(s.findings||[]).reduce((a,f)=>((sev[f.disposition]||0)>(sev[a.disposition]||0)?f:a),
+    {disposition:'APPROVE',color:'#34d399'});
+  const sig=p.verified?'<span class="ok">verified ✓</span>':'<span style="color:#f87171">UNVERIFIED ✗</span>';
+  const cost='$'+Number(s.claim.cost_usd).toLocaleString();
+
+  const steps=[];
+  steps.push({col:'#4d8fec',kind:'Incoming claim',title:`${s.claim.id} · ${s.claim.drug}`,
+    meta:`tier ${s.claim.tier} · ${s.claim.atc} · ${cost}`});
+  steps.push({col:p.verified?'#34d399':'#f87171',kind:'Signed AION policy',title:p.name,
+    meta:`${p.regulation} · ${p.aion_file} · author ${p.author_id}`,
+    reasonHtml:`signature ${sig} · sha256 ${p.sha256.slice(0,16)}…`});
+  for(const f of s.findings){
+    steps.push({col:f.color,kind:`Rule · ${f.agent}`,
+      titleHtml:`<span class="cdisp" style="color:${f.color}">${f.disposition}</span>`,
+      reason:f.reason,cite:f.citation});
+  }
+  steps.push({col:worst.color,kind:'Mesh consensus',
+    titleHtml:`tentative → <span class="cdisp" style="color:${worst.color}">${worst.disposition}</span>`,
+    reason:'strictest applicable rule governs the tentative decision'});
+  if(s.gating_constraint){
+    steps.push({col:'#38bdf8',gate:true,kind:'AION governance gate — fired',
+      title:'autonomous decision overridden',gateConstraint:s.gating_constraint});
+  }else{
+    steps.push({col:'#38bdf8',gate:true,kind:'AION governance gate',
+      title:'no override',reason:'ai_constraints permit this decision autonomously'});
+  }
+  steps.push({col:s.decision_color,big:true,kind:'Final decision',
+    finalTitle:s.decision_label,finalCol:s.decision_color,reason:s.rationale});
+
+  $('#adjud-audit').innerHTML=`
+    <div class="dc-outcome"><div class="aud-badge" style="background:${s.decision_color}22;color:${s.decision_color};border-color:${s.decision_color}66">${s.decision_label}</div></div>
+    <div class="dc-sub">policy decision chain · ${steps.length} steps</div>
+    <div class="chain">${steps.map(chainStep).join('')}</div>`;
+}
+function chainStep(st,i){
+  const cls='cnode'+(st.gate?' gate':'')+(st.big?' big':'');
+  let b=`<div class="ckind">${esc(st.kind)}</div>`;
+  if(st.finalTitle) b+=`<div class="cfinal" style="color:${st.finalCol}">${esc(st.finalTitle)}</div>`;
+  else if(st.titleHtml) b+=`<div class="ctitle">${st.titleHtml}</div>`;
+  else if(st.title) b+=`<div class="ctitle">${esc(st.title)}</div>`;
+  if(st.meta) b+=`<div class="cmeta">${esc(st.meta)}</div>`;
+  if(st.reasonHtml) b+=`<div class="cmeta">${st.reasonHtml}</div>`;
+  if(st.reason) b+=`<div class="creason">${esc(st.reason)}</div>`;
+  if(st.cite) b+=`<div class="ccite">${esc(st.cite)}</div>`;
+  if(st.gateConstraint) b+=`<div class="cgate"><div class="gc">${esc(st.gateConstraint)}</div></div>`;
+  return `<div class="cstep" style="--i:${i}"><div class="crail"><span class="${cls}" style="background:${st.col}"></span></div><div class="cbody">${b}</div></div>`;
+}
+function esc(x){ return (x||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+requestAnimationFrame(adjDraw);
 
 // ─────────────────────────────────────────── OWASP benchmark tab
 let benchLoaded=false;
@@ -568,6 +852,62 @@ function renderScorecard(d){
 }
 
 requestAnimationFrame(frame);
+
+// ─────────────────────────────────────────── Guided narrated tour
+const TOUR=[
+  {id:'s1_intro',       tab:'live',  action:'title',       title:'Meet SMESH',                 cap:"A new way to make regulated decisions — inspired by nature."},
+  {id:'s2_inspiration', tab:'live',  action:'diffuse',     title:'Inspired by forests',        cap:"Beneath every forest, trees share signals through a living network — no tree in charge."},
+  {id:'s3_consensus',   tab:'live',  action:'consensus',   title:'Agreement, without a boss',  cap:"Many small specialists weigh in and reach agreement on their own."},
+  {id:'s4_resilience',  tab:'live',  action:'chaos',       title:'No single point of failure', cap:"Knock out parts of the network — even hostile ones — and it routes around the damage."},
+  {id:'s5_rulebook',    tab:'adjud', action:'select_claim',claim:4,title:'The signed rulebook: AION',  cap:"The real regulations — cryptographically signed, versioned, tamper-proof."},
+  {id:'s6_combination', tab:'adjud', action:'hold',        claim:4,title:'Intelligence, meet compliance',cap:"The mesh decides. The signed rules govern what it's allowed to do."},
+  {id:'s7_claim',       tab:'adjud', action:'select_claim',claim:4,title:'A real claim arrives',       cap:"An expensive, off-label medication. Each specialist checks it against the signed policy."},
+  {id:'s8_chain',       tab:'adjud', action:'hold',        claim:4,title:'The decision chain',         cap:"Formulary passes · prior auth needed · step therapy needed · coverage says deny."},
+  {id:'s9_gate',        tab:'adjud', action:'hold',        claim:4,title:'The safeguard',              cap:"AION forbids the AI from denying coverage on its own → escalate to a human."},
+  {id:'s10_close',      tab:'adjud', action:'hold',        claim:4,title:'Explainable, end to end',    cap:"Decisions made like a forest. Governed like a regulation."},
+];
+let tourIdx=-1, tourClaim=null;
+const tAudio=$('#tour-audio');
+
+function switchTab(which){ const b=document.querySelector('.tab[data-tab="'+which+'"]'); if(b) b.click(); }
+function setMode(m){ const b=document.querySelector('#mode-seg button[data-mode="'+m+'"]'); if(b) b.click(); }
+function tourSelectClaim(i){ const s=$('#claim-sel'); if(!s||!s.options.length){ setTimeout(()=>tourSelectClaim(i),200); return; } s.value=String(i); s.dispatchEvent(new Event('change')); }
+
+function runSceneAction(s){
+  switchTab(s.tab);
+  setTimeout(()=>{
+    if(s.action==='diffuse'){ setMode('diffuse'); $('#run').click(); }
+    else if(s.action==='consensus'){ setMode('consensus'); setTimeout(()=>$('#run').click(),200); }
+    else if(s.action==='chaos'){ setMode('chaos'); const a=$('#atk'); if(a)a.value='node_failure'; const it=$('#intensity'); if(it){it.value=45; $('#atklbl').textContent='45%';} setTimeout(()=>$('#run').click(),220); }
+    else if(s.tab==='adjud' && s.claim!=null){
+      // Re-select on an explicit 'arrival' scene; otherwise only if the claim changed
+      // (so jumping straight to any demo scene still shows the right claim).
+      if(s.action==='select_claim' || s.claim!==tourClaim){ tourClaim=s.claim; tourSelectClaim(s.claim); }
+    }
+  },160);
+}
+
+function gotoScene(i){
+  if(i<0||i>=TOUR.length) return;
+  tourIdx=i; const s=TOUR[i];
+  $('#tc-step').textContent=(i+1)+' / '+TOUR.length;
+  $('#tc-title').textContent=s.title;
+  $('#tc-body').textContent=s.cap;
+  $('#tc-fill').style.width='0%';
+  runSceneAction(s);
+  tAudio.src='/audio/'+s.id+'.mp3';
+  tAudio.play().catch(()=>{}); $('#tc-play').textContent='⏸';
+}
+function startTour(){ tourIdx=-1; tourClaim=null; $('#tour').classList.remove('tour-hidden'); gotoScene(0); }
+function exitTour(){ tAudio.pause(); $('#tour').classList.add('tour-hidden'); }
+tAudio.addEventListener('ended',()=>{ if(tourIdx<TOUR.length-1) gotoScene(tourIdx+1); });
+tAudio.addEventListener('timeupdate',()=>{ const f=tAudio.duration?tAudio.currentTime/tAudio.duration:0; $('#tc-fill').style.width=(f*100)+'%'; });
+$('#tc-play').onclick=()=>{ if(tAudio.paused){ tAudio.play().catch(()=>{}); $('#tc-play').textContent='⏸'; } else { tAudio.pause(); $('#tc-play').textContent='▶'; } };
+$('#tc-next').onclick=()=>gotoScene(tourIdx+1);
+$('#tc-prev').onclick=()=>gotoScene(tourIdx-1);
+$('#tc-exit').onclick=exitTour;
+$('#start-tour').onclick=startTour;
+document.addEventListener('keydown',e=>{ if($('#tour').classList.contains('tour-hidden'))return; if(e.key==='ArrowRight')gotoScene(tourIdx+1); if(e.key==='ArrowLeft')gotoScene(tourIdx-1); if(e.key==='Escape')exitTour(); });
 </script>
 </body>
 </html>
