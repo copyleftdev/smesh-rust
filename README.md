@@ -25,11 +25,11 @@ cryptographically **signed policy** ([AION](https://github.com/aion-context/aion
 and when the AI would deny coverage on its own, it's stopped and escalated to a human.
 
 <p align="center">
-  <a href="https://youtu.be/WMM2bjEVV9k">
-    <img src="https://img.youtube.com/vi/WMM2bjEVV9k/maxresdefault.jpg" alt="Watch the SMESH × AION demo" width="720"/>
+  <a href="https://youtu.be/PQaowYdPCRE">
+    <img src="https://img.youtube.com/vi/PQaowYdPCRE/maxresdefault.jpg" alt="Watch the SMESH × AION demo" width="720"/>
   </a>
   <br/>
-  <a href="https://youtu.be/WMM2bjEVV9k"><strong>▶ Governed AI for regulated decisions — SMESH × AION (2.5 min)</strong></a>
+  <a href="https://youtu.be/PQaowYdPCRE"><strong>▶ Governed AI for regulated decisions — SMESH × AION (2.5 min)</strong></a>
 </p>
 
 > Run it yourself: `cargo run --bin smesh -- showcase` → open <http://localhost:8090/?tour=1> (auto-plays the guided tour).
@@ -39,6 +39,10 @@ and when the AI would deny coverage on its own, it's stopped and escalated to a 
 ## 🚀 Quick Start
 
 ```bash
+# Clone
+git clone https://github.com/copyleftdev/smesh-rust
+cd smesh-rust
+
 # Build
 cargo build --release
 

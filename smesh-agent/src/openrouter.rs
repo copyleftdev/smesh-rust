@@ -292,7 +292,7 @@ impl OpenRouterClient {
             .post(&url)
             .bearer_auth(&self.config.api_key)
             // Optional attribution headers recommended by OpenRouter.
-            .header("HTTP-Referer", "https://github.com/smesh-protocol/smesh-rust")
+            .header("HTTP-Referer", "https://github.com/copyleftdev/smesh-rust")
             .header("X-Title", "SMESH")
             .json(&request)
             .send()
@@ -385,7 +385,7 @@ impl LlmBackend for OpenRouterClient {
             .client
             .post(&url)
             .bearer_auth(&self.config.api_key)
-            .header("HTTP-Referer", "https://github.com/smesh-protocol/smesh-rust")
+            .header("HTTP-Referer", "https://github.com/copyleftdev/smesh-rust")
             .header("X-Title", "SMESH")
             .json(&payload)
             .send()
