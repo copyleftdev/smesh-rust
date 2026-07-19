@@ -4,6 +4,8 @@
 
 <h1 align="center">SMESH</h1>
 
+<p align="center"><a href="https://tokentip.to/@copyleftdev"><img alt="Tip my tokens" src="https://tokentip.to/badge/copyleftdev.svg?logo=1"></a></p>
+
 <p align="center">
   <strong>Decentralized LLM coordination · Plant-inspired · Blazing fast</strong>
 </p>
