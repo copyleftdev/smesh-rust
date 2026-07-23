@@ -143,6 +143,37 @@ impl Changeset<Staged> {
     }
 }
 
+/// One citation prepared for human eyes: the quote, where it lives in the
+/// original artifact, and enough surrounding context to judge it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceView {
+    pub doc_name: String,
+    pub quote: String,
+    pub anchor: String,
+    pub context: String,
+}
+
+/// A firewalled emission, summarized for the transparency panel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RejectedView {
+    pub role: String,
+    pub summary: String,
+    pub reason: String,
+}
+
+/// The refinery → dashboard handoff: everything a reviewer needs to ratify,
+/// serialized to disk between the mesh run and the human session.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StagedRun {
+    pub base_rev: String,
+    pub candidates: Vec<CandidateEdge>,
+    /// Evidence per candidate `key()`, in citation order.
+    pub evidence: std::collections::BTreeMap<String, Vec<EvidenceView>>,
+    pub rejected: Vec<RejectedView>,
+    pub contradictions_caught: usize,
+    pub scorecard: Option<crate::corpus::Scorecard>,
+}
+
 /// The Curator's output: a new revision whose identity commits to the base
 /// revision, the surviving edges, and the human ratification that authorized
 /// them.

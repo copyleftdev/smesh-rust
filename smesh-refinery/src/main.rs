@@ -29,6 +29,16 @@ async fn main() {
     match refine_meridian(&client).await {
         Ok(report) => {
             print!("{}", report.render());
+            if let Some(staged) = report.staged_run() {
+                let path = "refinery-staged.json";
+                match serde_json::to_string_pretty(&staged)
+                    .map_err(|e| e.to_string())
+                    .and_then(|json| std::fs::write(path, json).map_err(|e| e.to_string()))
+                {
+                    Ok(()) => println!("staged run written to {path} (serve with smesh-ratify)"),
+                    Err(e) => eprintln!("failed to write {path}: {e}"),
+                }
+            }
             let gate_passed = report
                 .scorecard
                 .as_ref()

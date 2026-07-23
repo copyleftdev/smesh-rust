@@ -9,7 +9,9 @@ use crate::verify::{audit_grounding, sentinel_pass};
 use crate::{Oracle, RefineryError};
 use smesh_world::corpus::Scorecard;
 use smesh_world::meridian;
-use smesh_world::{CandidateEdge, Changeset, Lane, Staged};
+use smesh_world::{
+    CandidateEdge, Changeset, EvidenceView, Lane, ProvenanceClass, RejectedView, Staged, StagedRun,
+};
 
 pub struct RunReport {
     pub docs: Vec<NamedDoc>,
@@ -32,6 +34,64 @@ impl RunReport {
             }
         }
         counts
+    }
+
+    /// Package the staged changeset for the ratification dashboard:
+    /// candidates plus reviewer-ready evidence (quote, native anchor,
+    /// surrounding context) resolved back through the CDM.
+    pub fn staged_run(&self) -> Option<StagedRun> {
+        let staged = self.staged.as_ref()?;
+        let mut evidence = std::collections::BTreeMap::new();
+        for edge in &staged.edges {
+            let ProvenanceClass::CorpusDerived { citations } = &edge.provenance else {
+                continue;
+            };
+            let views: Vec<EvidenceView> = citations
+                .iter()
+                .filter_map(|citation| {
+                    let named = self.docs.iter().find(|d| d.doc.id == citation.doc)?;
+                    let text = &named.doc.canonical_text;
+                    let mut lo = citation.span.start.saturating_sub(160);
+                    while lo > 0 && !text.is_char_boundary(lo) {
+                        lo -= 1;
+                    }
+                    let mut hi = (citation.span.end + 160).min(text.len());
+                    while hi < text.len() && !text.is_char_boundary(hi) {
+                        hi += 1;
+                    }
+                    Some(EvidenceView {
+                        doc_name: named.name.clone(),
+                        quote: citation.quote.clone(),
+                        anchor: named
+                            .doc
+                            .native_anchor(citation.span)
+                            .map(ToString::to_string)
+                            .unwrap_or_else(|| format!("offset {}", citation.span.start)),
+                        context: text[lo..hi].to_owned(),
+                    })
+                })
+                .collect();
+            evidence.insert(edge.key(), views);
+        }
+        Some(StagedRun {
+            base_rev: staged.base_rev.clone(),
+            candidates: staged.edges.clone(),
+            evidence,
+            rejected: self
+                .rejected
+                .iter()
+                .map(|r| RejectedView {
+                    role: format!("{:?}", r.role),
+                    summary: format!(
+                        "{} --[{}]--> {}",
+                        r.emission.subject, r.emission.kind, r.emission.object
+                    ),
+                    reason: r.reason.clone(),
+                })
+                .collect(),
+            contradictions_caught: self.contradictions_caught,
+            scorecard: self.scorecard.clone(),
+        })
     }
 
     /// Human-readable run summary for the CLI.
@@ -211,6 +271,21 @@ mod tests {
         assert_eq!(contested, 2, "both filing rules reach the human contested");
         let (_, _, red) = report.lane_counts();
         assert_eq!(red, 2);
+
+        let staged_run = report.staged_run().unwrap();
+        assert_eq!(staged_run.candidates.len(), 3);
+        let memo_key = staged
+            .edges
+            .iter()
+            .find(|e| e.object == "45-day filing window")
+            .unwrap()
+            .key();
+        let memo_evidence = &staged_run.evidence[&memo_key];
+        assert_eq!(memo_evidence[0].doc_name, "memo-4417.eml");
+        assert!(memo_evidence[0]
+            .anchor
+            .contains("memo-4417@meridianmutual.example"));
+        assert!(memo_evidence[0].context.contains("45 days"));
 
         let card = report.scorecard.as_ref().unwrap();
         assert_eq!(card.confabulated, 0, "firewalled emissions never score");

@@ -42,7 +42,8 @@ pub enum SourceFormat {
     Unknown,
 }
 
-/// Native coordinates in the original artifact, per format.
+/// Native coordinates in the original artifact, per format. `Display`
+/// renders the human-facing anchor label shown next to citations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NativeAnchor {
     PdfPage {
@@ -62,6 +63,22 @@ pub enum NativeAnchor {
     ByteOffset {
         offset: usize,
     },
+}
+
+impl fmt::Display for NativeAnchor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NativeAnchor::PdfPage { page } => write!(f, "page {page}"),
+            NativeAnchor::EmailLine { message_id, line } => {
+                write!(f, "{message_id}, line {line}")
+            }
+            NativeAnchor::MarkdownHeading { heading_path, line } => {
+                write!(f, "{}, line {line}", heading_path.join(" › "))
+            }
+            NativeAnchor::Line { line } => write!(f, "line {line}"),
+            NativeAnchor::ByteOffset { offset } => write!(f, "byte {offset}"),
+        }
+    }
 }
 
 /// A half-open byte range `start..end` into a document's canonical text.

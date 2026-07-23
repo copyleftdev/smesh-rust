@@ -24,8 +24,8 @@ pub use candidate::{CandidateEdge, Citation, Judgment, ProvenanceClass, Verdict}
 pub use cdm::{CdmDocument, CdmSpan, DocId, NativeAnchor, SourceFormat};
 pub use corpus::{DefectManifest, GoldEdge, GoldGraph, PlantedDefect, Scorecard};
 pub use delta::{
-    Changeset, Lane, RatificationRecord, Ratified, ReviewDecision, ReviewerId, Signature, Signed,
-    Staged,
+    Changeset, EvidenceView, Lane, RatificationRecord, Ratified, RejectedView, ReviewDecision,
+    ReviewerId, Signature, Signed, SignedChangeset, Staged, StagedRun,
 };
 pub use intake::Registrar;
 pub use ontology::{ConsensusPolicy, EdgeKind, StructuralConstraint, TransportKind};

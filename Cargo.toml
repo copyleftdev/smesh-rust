@@ -8,6 +8,7 @@ members = [
     "smesh-cli",
     "smesh-world",
     "smesh-refinery",
+    "smesh-ratify",
 ]
 
 [workspace.package]
@@ -42,6 +43,10 @@ blake3 = "1.5"
 # global thread pool, which is nondeterministic under test parallelism.
 lopdf = { version = "0.36", default-features = false }
 pdf-extract = "0.10"
+
+# Ratification dashboard
+axum = "0.8"
+ed25519-dalek = { version = "2.2", features = ["rand_core"] }
 rand = "0.8"
 uuid = { version = "1.6", features = ["v4", "serde"] }
 
