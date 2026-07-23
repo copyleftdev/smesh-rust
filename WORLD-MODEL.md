@@ -202,13 +202,14 @@ config-as-policy, CSV org roster, wiki export, scanned-memo PDFs.
 | `candidate.rs` | Candidate node/edge emissions with schema-mandatory citations |
 | `delta.rs` | Changeset lifecycle state machine; type-state ratification (unsigned changeset cannot reach `Signed`) |
 | `corpus.rs` | Gold graph, planted-defect manifest, scorecard types for Meridian |
-| `intake/` | Tier 0 Registrar: deterministic format sniffing; markdown adapter (heading-path anchors) and `.eml` adapter (header harvest, body-line anchors); PDF pending (AkamaiForms path) |
+| `intake/` | Tier 0 Registrar: deterministic format sniffing; markdown adapter (heading-path anchors), `.eml` adapter (header harvest, body-line anchors), PDF adapter (pdf-extract per-page → page anchors; textless PDFs loudly malformed), deterministic lopdf renderer |
+| `meridian.rs` | The instrumented corpus: authored gold graph (11 edges), 8-defect manifest, 9 rendered artifacts (5 md / 3 eml / 1 two-page PDF), evidence table binding gold edges to artifact quotes |
 
 ## 9. Phasing
 
 - **Phase 0 — DONE:** types + state machine + gates green.
-- **Phase 1 — IN PROGRESS:** Tier 0 intake adapters → CDM. Markdown + `.eml` shipped; PDF (AkamaiForms path) pending.
-- **Phase 2:** Meridian gold graph + deterministic renderer + planted defects.
+- **Phase 1 — DONE:** Tier 0 intake adapters → CDM (markdown, `.eml`, PDF). MIME multipart + OCR deferred to the vendor-attachment / scanned-doc work.
+- **Phase 2 — DONE:** Meridian gold graph + deterministic renderer + planted defects; every artifact ingests through the Registrar, every evidence quote grounds a citation, negative space verified truly absent.
 - **Phase 3:** Wire Tier 1/2 experts over `smesh-agent` (K3 extract, cross-model verify), run the field, emit first staged changeset.
 - **Phase 4:** Ratification dashboard (Axum; prevue-api pattern) + Curator signing into AION.
 - **Phase 5:** Scorecard harness; Meridian becomes the regression gate.

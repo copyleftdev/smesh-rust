@@ -16,6 +16,7 @@ pub mod cdm;
 pub mod corpus;
 pub mod delta;
 pub mod intake;
+pub mod meridian;
 pub mod ontology;
 pub mod role;
 

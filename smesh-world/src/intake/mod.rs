@@ -7,6 +7,8 @@
 
 mod eml;
 mod markdown;
+mod pdf;
+pub(crate) mod pdf_render;
 
 use crate::cdm::{CdmDocument, SourceFormat};
 use crate::WorldError;
@@ -41,6 +43,7 @@ impl Registrar {
         match Self::sniff(bytes) {
             SourceFormat::Markdown => markdown::ingest(bytes),
             SourceFormat::Eml => eml::ingest(bytes),
+            SourceFormat::Pdf => pdf::ingest(bytes),
             other => Err(WorldError::UnsupportedFormat(other)),
         }
     }
@@ -102,8 +105,8 @@ mod tests {
     #[test]
     fn unsupported_formats_are_an_explicit_error() {
         assert!(matches!(
-            Registrar::ingest(b"%PDF-1.7"),
-            Err(WorldError::UnsupportedFormat(SourceFormat::Pdf))
+            Registrar::ingest(b"{\"not\": \"yet\"}"),
+            Err(WorldError::UnsupportedFormat(SourceFormat::Json))
         ));
     }
 }
