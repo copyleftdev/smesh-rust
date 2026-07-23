@@ -20,6 +20,80 @@ impl GoldEdge {
     pub fn key(&self) -> String {
         format!("{}|{:?}|{}", self.subject, self.kind, self.object)
     }
+
+    /// Semantic match against an observed candidate: same kind class,
+    /// alias-aware subject, canonicalized object with containment tolerance.
+    /// Exact-key equality measured naming agreement, not truth — the first
+    /// live run scored `Claims Requires 45-day filing window` as both a
+    /// false positive and a false negative against `Claims GovernedBy
+    /// 45-day filing window`.
+    pub fn matches(&self, observed: &CandidateEdge, aliases: &AliasTable) -> bool {
+        kind_class(self.kind) == kind_class(observed.kind)
+            && aliases.same_subject(&self.subject, &observed.subject)
+            && objects_match(&self.object, &observed.object)
+    }
+}
+
+/// Groups of edge kinds that assert the same class of fact. Extractors
+/// legitimately disagree about `GovernedBy` vs `Requires`; the scorecard
+/// should not.
+fn kind_class(kind: EdgeKind) -> u8 {
+    match kind {
+        EdgeKind::GovernedBy | EdgeKind::Requires | EdgeKind::Triggers => 0,
+        EdgeKind::DefinesTerm => 1,
+        EdgeKind::ScopedTo | EdgeKind::MemberOf => 2,
+        EdgeKind::Owns | EdgeKind::Operates => 3,
+        EdgeKind::ReportsTo => 4,
+        EdgeKind::Precedes => 5,
+        EdgeKind::Supersedes => 6,
+    }
+}
+
+/// Lowercased, punctuation-free, whitespace-collapsed comparison form.
+pub fn canon(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut pending_space = false;
+    for c in s.chars() {
+        if c.is_alphanumeric() {
+            if pending_space && !out.is_empty() {
+                out.push(' ');
+            }
+            pending_space = false;
+            out.extend(c.to_lowercase());
+        } else {
+            pending_space = true;
+        }
+    }
+    out
+}
+
+fn objects_match(gold: &str, observed: &str) -> bool {
+    let (g, o) = (canon(gold), canon(observed));
+    if g == o {
+        return true;
+    }
+    let shorter = g.len().min(o.len());
+    shorter >= 8 && (g.contains(&o) || o.contains(&g))
+}
+
+/// Declared name equivalences (e.g. `HR` ↔ `Human Resources`) so the gold
+/// graph is not hostage to one arbitrary spelling.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AliasTable {
+    pub groups: Vec<Vec<String>>,
+}
+
+impl AliasTable {
+    pub fn same_subject(&self, a: &str, b: &str) -> bool {
+        let (ca, cb) = (canon(a), canon(b));
+        if ca == cb {
+            return true;
+        }
+        self.groups.iter().any(|group| {
+            let canon_group: Vec<String> = group.iter().map(|g| canon(g)).collect();
+            canon_group.contains(&ca) && canon_group.contains(&cb)
+        })
+    }
 }
 
 /// Each planted defect targets a specific subsystem of the mesh.
@@ -72,6 +146,8 @@ impl DefectManifest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GoldGraph {
     pub edges: Vec<GoldEdge>,
+    #[serde(default)]
+    pub aliases: AliasTable,
 }
 
 /// The headline numbers. Confabulation rate targets zero — an edge asserted
@@ -94,16 +170,28 @@ impl Scorecard {
         manifest: &DefectManifest,
         contradictions_caught: usize,
     ) -> Self {
-        let gold_keys: BTreeSet<String> = gold.edges.iter().map(GoldEdge::key).collect();
-        let observed_keys: BTreeSet<String> = observed.iter().map(CandidateEdge::key).collect();
+        let mut deduped: Vec<&CandidateEdge> = Vec::new();
+        let mut seen: BTreeSet<(u8, String, String)> = BTreeSet::new();
+        for e in observed {
+            if seen.insert((kind_class(e.kind), canon(&e.subject), canon(&e.object))) {
+                deduped.push(e);
+            }
+        }
 
-        let true_positives = observed_keys.intersection(&gold_keys).count();
-        let false_positives = observed_keys.difference(&gold_keys).count();
-        let false_negatives = gold_keys.difference(&observed_keys).count();
-        let confabulated = observed
+        let true_positives = gold
+            .edges
+            .iter()
+            .filter(|g| deduped.iter().any(|o| g.matches(o, &gold.aliases)))
+            .count();
+        let false_negatives = gold.edges.len() - true_positives;
+        let false_positives = deduped
+            .iter()
+            .filter(|o| !gold.edges.iter().any(|g| g.matches(o, &gold.aliases)))
+            .count();
+        let confabulated = deduped
             .iter()
             .filter(|e| {
-                !gold_keys.contains(&e.key())
+                !gold.edges.iter().any(|g| g.matches(e, &gold.aliases))
                     && match &e.provenance {
                         ProvenanceClass::CorpusDerived { citations } => citations.is_empty(),
                         ProvenanceClass::HumanAttested { .. } => false,
@@ -170,9 +258,12 @@ mod tests {
                 GoldEdge {
                     subject: "Finance".into(),
                     kind: EdgeKind::Owns,
-                    object: "Ledger".into(),
+                    object: "General Ledger".into(),
                 },
             ],
+            aliases: AliasTable {
+                groups: vec![vec!["Claims".into(), "Claims department".into()]],
+            },
         }
     }
 
@@ -242,5 +333,41 @@ mod tests {
     #[test]
     fn manifest_counts_planted_contradictions() {
         assert_eq!(manifest().planted_contradictions(), 1);
+    }
+
+    #[test]
+    fn canonical_matching_forgives_naming_noise_not_substance() {
+        let hits = vec![
+            observed("Claims department", EdgeKind::ReportsTo, "Ops"),
+            observed("finance", EdgeKind::Operates, "the General Ledger"),
+        ];
+        let card = Scorecard::evaluate(&gold(), &hits, &manifest(), 1);
+        assert_eq!(
+            card.true_positives, 2,
+            "alias subject, kind-class sibling, and object containment all match"
+        );
+        assert_eq!(card.false_positives, 0);
+
+        let miss = vec![observed("Claims", EdgeKind::ReportsTo, "Legal")];
+        let card = Scorecard::evaluate(&gold(), &miss, &manifest(), 1);
+        assert_eq!(card.true_positives, 0, "different substance stays a miss");
+    }
+
+    #[test]
+    fn case_variant_duplicates_collapse_before_scoring() {
+        let hits = vec![
+            observed("Claims", EdgeKind::ReportsTo, "Ops"),
+            observed("claims", EdgeKind::ReportsTo, "OPS"),
+        ];
+        let card = Scorecard::evaluate(&gold(), &hits, &manifest(), 1);
+        assert_eq!(card.true_positives, 1);
+        assert_eq!(card.false_positives, 0);
+    }
+
+    #[test]
+    fn canon_normalizes_case_punctuation_and_whitespace() {
+        assert_eq!(canon("IT-Security"), "it security");
+        assert_eq!(canon("  Prior   Authorization. "), "prior authorization");
+        assert_eq!(canon("45-day filing window"), "45 day filing window");
     }
 }

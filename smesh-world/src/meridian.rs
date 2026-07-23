@@ -97,6 +97,13 @@ pub fn corpus() -> MeridianCorpus {
             prior_auth.clone(),
             token_rotation.clone(),
         ],
+        aliases: crate::corpus::AliasTable {
+            groups: vec![
+                vec!["HR".into(), "Human Resources".into()],
+                vec!["IT-Security".into(), "IT Security".into()],
+                vec!["Claims".into(), "Claims department".into()],
+            ],
+        },
     };
 
     let manifest = DefectManifest {

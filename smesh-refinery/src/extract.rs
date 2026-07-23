@@ -8,6 +8,7 @@ use crate::packet::NamedDoc;
 use crate::roster;
 use crate::{extract_json, Oracle, RefineryError};
 use serde::Deserialize;
+use smesh_world::corpus::canon;
 use smesh_world::role::ModelPolicy;
 use smesh_world::{CandidateEdge, CdmSpan, Citation, EdgeKind, WorldRole};
 
@@ -114,10 +115,11 @@ pub fn ground(
         Err(e) => return reject(format!("citation rejected: {e}"), outcome, emission),
     };
 
+    let (subj, obj) = (canon(&emission.subject), canon(&emission.object));
     if let Some(existing) = outcome
         .candidates
         .iter_mut()
-        .find(|c| c.subject == emission.subject && c.kind == kind && c.object == emission.object)
+        .find(|c| c.kind == kind && canon(&c.subject) == subj && canon(&c.object) == obj)
     {
         if let smesh_world::ProvenanceClass::CorpusDerived { citations } = &mut existing.provenance
         {
@@ -220,6 +222,19 @@ mod tests {
         ground(WorldRole::Policy, bad_doc, &docs, &mut outcome);
         assert!(outcome.candidates.is_empty());
         assert_eq!(outcome.rejected.len(), 2);
+    }
+
+    #[test]
+    fn case_variant_emissions_merge_into_one_candidate() {
+        let docs = docs();
+        let mut outcome = ExtractionOutcome::default();
+        let quote = "Claims must be filed within 30 days.";
+        ground(WorldRole::Policy, emission(quote), &docs, &mut outcome);
+        let mut variant = emission(quote);
+        variant.subject = "CLAIMS".into();
+        variant.object = "30-Day Filing Window".into();
+        ground(WorldRole::Policy, variant, &docs, &mut outcome);
+        assert_eq!(outcome.candidates.len(), 1);
     }
 
     #[test]

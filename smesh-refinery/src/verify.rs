@@ -155,12 +155,22 @@ pub async fn sentinel_pass(
     }
 
     if candidates.len() > 1 {
+        // Evidence quotes ride along: two edges can share a bland name
+        // ("PTO accrual") while their quoted substance conflicts — the
+        // Meridian boilerplate trap taught us names alone are not enough.
         let listing: String = candidates
             .iter()
             .enumerate()
             .map(|(i, c)| {
+                let quote = match &c.provenance {
+                    ProvenanceClass::CorpusDerived { citations } => citations
+                        .first()
+                        .map(|ci| ci.quote.chars().take(160).collect::<String>())
+                        .unwrap_or_default(),
+                    ProvenanceClass::HumanAttested { .. } => String::new(),
+                };
                 format!(
-                    "{i}. \"{}\" --[{:?}]--> \"{}\"\n",
+                    "{i}. \"{}\" --[{:?}]--> \"{}\"  evidence: \"{quote}\"\n",
                     c.subject, c.kind, c.object
                 )
             })

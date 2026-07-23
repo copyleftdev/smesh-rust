@@ -78,10 +78,13 @@ Respond with ONLY a JSON object: {"verdict": "corroborate" | "refute", "rational
 /// mechanics cannot see (different subjects, conflicting substance).
 pub fn sentinel_system() -> String {
     r#"You are a contradiction sentinel reviewing a numbered list of candidate
-edges extracted from one organization's documents. Identify pairs whose
-claims cannot BOTH be true operational rules at the same time (e.g. two
-different limits for the same activity). Ignore pairs where one explicitly
-supersedes the other. Do not flag mere overlap or restatement.
+edges extracted from one organization's documents. Each line carries the
+verbatim evidence quote behind the edge — judge the QUOTED SUBSTANCE, not
+just the edge names: two edges with similar names can still conflict in
+substance (different limits, rates, or deadlines for the same activity).
+Identify pairs whose claims cannot BOTH be true operational rules at the
+same time. Ignore pairs where one explicitly supersedes the other. Do not
+flag mere overlap or restatement.
 
 Respond with ONLY a JSON array of index pairs, e.g. [[0,3],[2,7]]. An empty
 array [] means no contradictions."#
