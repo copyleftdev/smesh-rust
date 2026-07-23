@@ -210,6 +210,6 @@ config-as-policy, CSV org roster, wiki export, scanned-memo PDFs.
 - **Phase 0 — DONE:** types + state machine + gates green.
 - **Phase 1 — DONE:** Tier 0 intake adapters → CDM (markdown, `.eml`, PDF). MIME multipart + OCR deferred to the vendor-attachment / scanned-doc work.
 - **Phase 2 — DONE:** Meridian gold graph + deterministic renderer + planted defects; every artifact ingests through the Registrar, every evidence quote grounds a citation, negative space verified truly absent.
-- **Phase 3:** Wire Tier 1/2 experts over `smesh-agent` (K3 extract, cross-model verify), run the field, emit first staged changeset.
+- **Phase 3 — SHIPPED (`smesh-refinery`):** Tier 1/2 experts over `smesh-agent`: 4 extractor lenses on K3, grounding firewall (verbatim quote → `Citation::grounded` or attributed rejection), Grounding Auditor (cross-family entailment), Contradiction Sentinel (deterministic supersession/uniqueness resolution + cross-family semantic pairs), staged changeset + lanes + scorecard. `cargo run -p smesh-refinery` = live Meridian run. Field/reputation feedback into `smesh-core` is Phase 3b, deferred.
 - **Phase 4:** Ratification dashboard (Axum; prevue-api pattern) + Curator signing into AION.
 - **Phase 5:** Scorecard harness; Meridian becomes the regression gate.
