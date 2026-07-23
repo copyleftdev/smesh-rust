@@ -202,11 +202,12 @@ config-as-policy, CSV org roster, wiki export, scanned-memo PDFs.
 | `candidate.rs` | Candidate node/edge emissions with schema-mandatory citations |
 | `delta.rs` | Changeset lifecycle state machine; type-state ratification (unsigned changeset cannot reach `Signed`) |
 | `corpus.rs` | Gold graph, planted-defect manifest, scorecard types for Meridian |
+| `intake/` | Tier 0 Registrar: deterministic format sniffing; markdown adapter (heading-path anchors) and `.eml` adapter (header harvest, body-line anchors); PDF pending (AkamaiForms path) |
 
 ## 9. Phasing
 
-- **Phase 0 (this scaffold):** types + state machine + gates green.
-- **Phase 1:** Tier 0 intake adapters (markdown, PDF via AkamaiForms path, `.eml`) → CDM fixtures.
+- **Phase 0 — DONE:** types + state machine + gates green.
+- **Phase 1 — IN PROGRESS:** Tier 0 intake adapters → CDM. Markdown + `.eml` shipped; PDF (AkamaiForms path) pending.
 - **Phase 2:** Meridian gold graph + deterministic renderer + planted defects.
 - **Phase 3:** Wire Tier 1/2 experts over `smesh-agent` (K3 extract, cross-model verify), run the field, emit first staged changeset.
 - **Phase 4:** Ratification dashboard (Axum; prevue-api pattern) + Curator signing into AION.

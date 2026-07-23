@@ -15,6 +15,7 @@ pub mod candidate;
 pub mod cdm;
 pub mod corpus;
 pub mod delta;
+pub mod intake;
 pub mod ontology;
 pub mod role;
 
@@ -25,6 +26,7 @@ pub use delta::{
     Changeset, Lane, RatificationRecord, Ratified, ReviewDecision, ReviewerId, Signature, Signed,
     Staged,
 };
+pub use intake::Registrar;
 pub use ontology::{ConsensusPolicy, EdgeKind, StructuralConstraint, TransportKind};
 pub use role::{Capability, ModelPolicy, Tier, WorldRole};
 
@@ -46,6 +48,10 @@ pub enum WorldError {
     MissingAttestation,
     #[error("changeset is empty; nothing to stage")]
     EmptyChangeset,
+    #[error("no adapter for format {0:?}")]
+    UnsupportedFormat(cdm::SourceFormat),
+    #[error("malformed artifact: {0}")]
+    Malformed(String),
     #[error("ratification record does not cover candidate {0}")]
     UnreviewedCandidate(String),
 }
