@@ -47,3 +47,32 @@ SMESH_DST_SEEDS=5000 cargo test -p smesh-core --test dst --release
 
 VERIFY_JOBS=2 ./verify/mutants.sh   # quieter still
 ```
+
+## Mutation baseline
+
+First full run, recorded so progress is measurable rather than felt:
+
+```
+358 mutants: 151 caught, 166 survived, 40 unviable, 1 timeout   (52% survival)
+```
+
+That number was the most useful thing the verification work produced, and not
+because it was good. It said the mesh layer's behaviour had been established by
+running live processes by hand and never encoded: `anti_entropy_loop`,
+`relay_forward`, `forward_signal` and `reap_dead_peers` could each be deleted
+outright with the suite still green. The convergence fix had no test holding it
+in place.
+
+Fixing the worst of those exposed a second, subtler problem. Relaying and
+anti-entropy both get a claim across a mesh, so with both running neither is
+individually necessary and a test cannot tell which one carried the message.
+The relay test now runs with anti-entropy switched off; otherwise it passes
+whether or not relaying works at all.
+
+Two survivors in that area are left deliberately: deleting a struct field that
+falls back to the same default the test already uses is not a behaviour change,
+and chasing it would mean asserting on configuration rather than conduct.
+
+Most of the remaining survivors are in `signal.rs` and `node.rs`, largely
+arithmetic inside decay and scoring that no test pins to a precise value. Worth
+working through; not urgent in the way a deletable anti-entropy loop was.

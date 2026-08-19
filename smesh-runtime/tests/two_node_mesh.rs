@@ -23,12 +23,45 @@ struct MeshNode {
 
 impl MeshNode {
     async fn start(name: &str, bootstrap: Vec<SocketAddr>) -> Self {
+        Self::start_with(name, bootstrap, true, 400).await
+    }
+
+    /// Start with peer discovery off, so the topology stays exactly as given.
+    ///
+    /// Discovery quietly turns any shape into a full mesh, which hides every
+    /// property that depends on a message having to cross an intermediate node.
+    async fn start_pinned(name: &str, bootstrap: Vec<SocketAddr>) -> Self {
+        Self::start_with(name, bootstrap, false, 400).await
+    }
+
+    /// Pinned topology with anti-entropy switched off.
+    ///
+    /// Relaying and anti-entropy both get a claim across a mesh, so with both
+    /// running neither is individually necessary and a test cannot tell which
+    /// one carried it. Turning one off is the only way to hold the other to
+    /// account — mutation testing showed that deleting the relay path left the
+    /// suite green precisely because re-announcement covered for it.
+    async fn start_relay_only(name: &str, bootstrap: Vec<SocketAddr>) -> Self {
+        Self::start_with(name, bootstrap, false, 0).await
+    }
+
+    async fn start_with(
+        name: &str,
+        bootstrap: Vec<SocketAddr>,
+        discovery: bool,
+        anti_entropy_ms: u64,
+    ) -> Self {
         let mut node = Node::named(name);
         // Trust the peers we will actually talk to, so the probabilistic relay
         // policy does not make these tests flaky.
         node.trust_scores.insert("node-a".to_string(), 0.99);
         node.trust_scores.insert("node-b".to_string(), 0.99);
         node.trust_scores.insert("node-c".to_string(), 0.99);
+        for peer in [
+            "left", "middle", "right", "early", "late", "stayer", "leaver",
+        ] {
+            node.trust_scores.insert(peer.to_string(), 0.99);
+        }
         let node_id = node.id.clone();
 
         let mut network = Network::new();
@@ -45,6 +78,8 @@ impl MeshNode {
                     bind_addr: LOCALHOST.parse().unwrap(),
                     bootstrap,
                     keepalive_interval_ms: 500,
+                    anti_entropy_interval_ms: anti_entropy_ms,
+                    peer_discovery: discovery,
                     ..Default::default()
                 },
                 &node_id,
@@ -511,4 +546,123 @@ async fn punch_coordination_reaches_the_target() {
     rendezvous.shutdown().await;
     left.shutdown().await;
     right.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_late_joiner_learns_what_it_missed() {
+    // Mutation testing found that deleting the anti-entropy loop entirely left
+    // the suite green, which means the fix for the convergence bug had no test
+    // holding it in place.
+    //
+    // A node that arrives after a claim has settled cannot be told about it by
+    // relaying: its neighbour already knows, so forward-iff-changed keeps that
+    // neighbour silent. Only a periodic re-announcement reaches it.
+    let early = MeshNode::start_pinned("early", vec![]).await;
+    let middle = MeshNode::start_pinned("middle", vec![early.addr()]).await;
+
+    eventually(Duration::from_secs(5), "early and middle meet", || async {
+        middle.runtime.peers().connected_count().await == 1
+    })
+    .await;
+
+    let hash = early
+        .emit_claim("something that happened before you arrived")
+        .await;
+
+    eventually(Duration::from_secs(5), "middle has the claim", || async {
+        middle.has_signal(&hash).await
+    })
+    .await;
+
+    // Let the claim go quiet: nothing new is happening anywhere.
+    tokio::time::sleep(Duration::from_millis(700)).await;
+
+    // Now someone turns up, connected only to the node that already knows.
+    let late = MeshNode::start_pinned("late", vec![middle.addr()]).await;
+
+    eventually(
+        Duration::from_secs(8),
+        "the late joiner is told what it missed",
+        || async { late.has_signal(&hash).await },
+    )
+    .await;
+
+    let attesters = late.attesters_for(&hash).await;
+    assert_eq!(
+        attesters,
+        vec!["early".to_string()],
+        "the late joiner should learn who actually attested"
+    );
+
+    early.shutdown().await;
+    middle.shutdown().await;
+    late.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_claim_crosses_a_node_that_is_neither_end() {
+    // Deleting the relay path also left the suite green: every existing test
+    // used a topology where both ends were already adjacent, so nothing ever
+    // had to be carried by a third party.
+    // Anti-entropy off: relaying is the only way across, so this test fails if
+    // relaying stops working rather than being quietly covered for.
+    let left = MeshNode::start_relay_only("left", vec![]).await;
+    let middle = MeshNode::start_relay_only("middle", vec![left.addr()]).await;
+    let right = MeshNode::start_relay_only("right", vec![middle.addr()]).await;
+
+    eventually(Duration::from_secs(6), "the line forms", || async {
+        middle.runtime.peers().connected_count().await == 2
+            && left.runtime.peers().connected_count().await == 1
+            && right.runtime.peers().connected_count().await == 1
+    })
+    .await;
+
+    // The ends are not adjacent, so this can only arrive via the middle.
+    assert!(
+        right.runtime.peers().get_peer("left").await.is_none(),
+        "the ends must not be directly connected or the test proves nothing"
+    );
+
+    let hash = left.emit_claim("carried by someone else").await;
+
+    eventually(
+        Duration::from_secs(10),
+        "the far end receives a relayed claim",
+        || async { right.has_signal(&hash).await },
+    )
+    .await;
+
+    assert_eq!(
+        right.attesters_for(&hash).await,
+        vec!["left".to_string()],
+        "a relayed claim must still name its originator, not its carrier"
+    );
+
+    left.shutdown().await;
+    middle.shutdown().await;
+    right.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_departed_peer_stops_being_reported_as_connected() {
+    // Reaping was verified by hand with live processes and never encoded, so
+    // deleting it left the suite green.
+    let stayer = MeshNode::start("stayer", vec![]).await;
+    let leaver = MeshNode::start("leaver", vec![stayer.addr()]).await;
+
+    eventually(Duration::from_secs(5), "they meet", || async {
+        stayer.runtime.peers().connected_count().await == 1
+    })
+    .await;
+
+    leaver.shutdown().await;
+
+    eventually(
+        Duration::from_secs(20),
+        "the survivor notices the departure",
+        || async { stayer.runtime.peers().connected_count().await == 0 },
+    )
+    .await;
+
+    stayer.shutdown().await;
 }
