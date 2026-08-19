@@ -313,7 +313,15 @@ function decisionChip(d){
 function evidenceHtml(ev){
   const ctx = esc(ev.context);
   const q = esc(ev.quote);
-  const marked = ctx.includes(q) ? ctx.replace(q, `<mark>${q}</mark>`) : `${ctx}<br><mark>${q}</mark>`;
+  // String.replace expands $& $` $' and $1 in the replacement, so a quote
+  // containing a dollar sign is rendered as something the document does not
+  // say. This is the text a reviewer reads before approving, so a mangled
+  // quote means approving something they were never shown. Splice by index
+  // instead, and only mark the first occurrence.
+  const at = ctx.indexOf(q);
+  const marked = at === -1
+    ? `${ctx}<br><mark>${q}</mark>`
+    : ctx.slice(0, at) + `<mark>${q}</mark>` + ctx.slice(at + q.length);
   return `<div class="evidence">
     <div class="evidence-src">
       <svg width="16" height="16"><use href="#${DOC_ICON(ev.doc_name)}"/></svg>

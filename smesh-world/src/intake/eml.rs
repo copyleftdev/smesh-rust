@@ -24,6 +24,34 @@ pub fn ingest(bytes: &[u8]) -> Result<CdmDocument, WorldError> {
         .map(|v| v.trim_matches(['<', '>']).to_owned())
         .ok_or_else(|| WorldError::Malformed("missing Message-ID header".into()))?;
 
+    // Refuse what we cannot faithfully represent.
+    //
+    // A quoted-printable or base64 body stored verbatim is not the text the
+    // author wrote: citations would quote transfer encoding, and a reviewer
+    // would be shown "=E2=80=99" where an apostrophe belongs. A multipart
+    // message stored verbatim buries the prose in MIME boundaries. Better to
+    // reject the format outright than to ground a claim in a mangled reading of
+    // it — decoding these is a real job for the adapter, not a one-liner here.
+    if let Some(encoding) = headers.get("content-transfer-encoding") {
+        let encoding = encoding.trim().to_ascii_lowercase();
+        if !matches!(encoding.as_str(), "7bit" | "8bit" | "binary" | "") {
+            return Err(WorldError::Malformed(format!(
+                "content-transfer-encoding {encoding} is not decoded yet; \
+                 storing it verbatim would cite the encoding rather than the text"
+            )));
+        }
+    }
+    if let Some(content_type) = headers.get("content-type") {
+        let content_type = content_type.trim().to_ascii_lowercase();
+        if content_type.starts_with("multipart/") {
+            return Err(WorldError::Malformed(
+                "multipart messages are not split yet; storing one verbatim \
+                 would bury the prose in MIME boundaries"
+                    .into(),
+            ));
+        }
+    }
+
     let canonical = body.to_owned();
     let mut anchors = Vec::new();
     let mut offset = 0usize;
@@ -147,5 +175,38 @@ mod tests {
             doc.canonical_text,
             ingest(MEMO.as_bytes()).unwrap().canonical_text
         );
+    }
+}
+
+#[cfg(test)]
+mod encoding_tests {
+    use super::*;
+
+    #[test]
+    fn an_encoded_body_is_refused_rather_than_stored_raw() {
+        // Storing this verbatim would let a citation quote "=E2=80=99" and
+        // present it to a reviewer as the author's words.
+        let raw = b"Message-ID: <a@b>\nContent-Transfer-Encoding: quoted-printable\n\nit=E2=80=99s fine\n";
+        let err = ingest(raw).unwrap_err();
+        assert!(
+            matches!(err, WorldError::Malformed(ref m) if m.contains("quoted-printable")),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_multipart_body_is_refused() {
+        let raw = b"Message-ID: <a@b>\nContent-Type: multipart/mixed; boundary=xyz\n\n--xyz\nhello\n--xyz--\n";
+        let err = ingest(raw).unwrap_err();
+        assert!(
+            matches!(err, WorldError::Malformed(ref m) if m.contains("multipart")),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_plain_body_still_ingests() {
+        let raw = b"Message-ID: <a@b>\nContent-Type: text/plain\n\nthe handbook says two weeks\n";
+        assert!(ingest(raw).is_ok());
     }
 }

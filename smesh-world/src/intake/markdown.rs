@@ -56,7 +56,18 @@ fn parse_heading(line: &str) -> Option<(u8, String)> {
         return None;
     }
     let rest = line[hashes..].strip_prefix(' ')?;
-    let heading = rest.trim().trim_end_matches('#').trim();
+
+    // Only a *closing sequence* is decoration, and CommonMark requires it to be
+    // preceded by a space. `trim_end_matches` removed hashes unconditionally,
+    // so "## Sprint #" became "Sprint" and "### C#" became "C" — the heading
+    // silently lost the character that identified it.
+    let trimmed = rest.trim();
+    let heading = match trimmed.rsplit_once(' ') {
+        Some((before, tail)) if !tail.is_empty() && tail.bytes().all(|b| b == b'#') => {
+            before.trim()
+        }
+        _ => trimmed,
+    };
     if heading.is_empty() {
         return None;
     }
