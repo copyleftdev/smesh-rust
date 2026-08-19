@@ -59,6 +59,12 @@ const REFLEXIVE_TICKS_MAX: u32 = 30;
 /// A day is far beyond any real TTL; anything past it is noise or malice.
 const MAX_SIGNAL_AGE_MS: f64 = 86_400_000.0;
 
+/// Most claims re-announced in one anti-entropy round.
+///
+/// Bounds the cost of a node holding a very large field: better to heal slowly
+/// than to send a burst proportional to everything it knows.
+const ANTI_ENTROPY_MAX_SIGNALS: usize = 32;
+
 /// How many simultaneous-open attempts before giving up on a peer.
 const PUNCH_ROUNDS: u32 = 4;
 /// How many times the punched-at side tries back.
@@ -85,6 +91,10 @@ pub struct MeshConfig {
     /// handshake the instant the endpoint binds — journalling identity from the
     /// caller afterwards races with it and can land second.
     pub node_metadata: serde_json::Value,
+    /// How often every node re-announces what it holds, in milliseconds.
+    ///
+    /// Zero disables it.
+    pub anti_entropy_interval_ms: u64,
     /// Whether to dial peers learned second-hand from a `PeerResponse`.
     ///
     /// Off pins the topology to exactly what `bootstrap` describes, which is
@@ -101,6 +111,7 @@ impl Default for MeshConfig {
             keepalive_interval_ms: 5_000,
             max_peers_shared: 32,
             max_message_size: 1024 * 1024,
+            anti_entropy_interval_ms: 5_000,
             node_metadata: serde_json::Value::Null,
             peer_discovery: true,
         }
@@ -352,6 +363,17 @@ pub(crate) async fn start(
         tasks.push(tokio::spawn(async move {
             inbound_loop(ctx, incoming).await;
         }));
+    }
+
+    // Periodic re-announcement of what we hold.
+    {
+        let ctx = Arc::clone(&ctx);
+        let interval_ms = config.anti_entropy_interval_ms;
+        if interval_ms > 0 {
+            tasks.push(tokio::spawn(async move {
+                anti_entropy_loop(ctx, interval_ms).await;
+            }));
+        }
     }
 
     // Keepalive / latency probing.
@@ -1406,6 +1428,69 @@ async fn reconnect_loop(ctx: Arc<MeshCtx>) {
             }
         });
         futures::future::join_all(attempts).await;
+    }
+}
+
+/// Re-announce every claim this node holds, whether or not it originated it.
+///
+/// Forwarding only when local knowledge grew is what makes gossip terminate,
+/// but it also makes a node that already knows something go permanently silent
+/// about it. If a neighbour behind that node missed the claim — a declined
+/// relay, a dropped packet — nothing ever offers it again, and the gap is
+/// permanent even on a perfect network.
+///
+/// Re-announcing only from the nodes that originated a claim does not fix it,
+/// for exactly the same reason: the silent relay sits between them. Every
+/// holder has to speak. A deterministic simulation found this by failing to
+/// converge with no packet loss at all; see `smesh-core/tests/dst.rs`.
+///
+/// This is cheap because the receiving side discards anything that teaches it
+/// nothing, so a settled mesh converges to one wasted round-trip per interval.
+async fn anti_entropy_loop(ctx: Arc<MeshCtx>, interval_ms: u64) {
+    let mut ticker = tokio::time::interval(Duration::from_millis(interval_ms.max(250)));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+    loop {
+        ticker.tick().await;
+
+        if ctx.transport.connected_addrs().await.is_empty() {
+            continue;
+        }
+
+        // Snapshot under the lock, send outside it.
+        let (announcements, field_time) = {
+            let network = ctx.network.read().await;
+            let now = network.field.current_time;
+            let signals: Vec<Signal> = network
+                .field
+                .signals
+                .values()
+                .filter(|s| !s.is_expired(now))
+                .take(ANTI_ENTROPY_MAX_SIGNALS)
+                .map(|s| {
+                    let mut copy = s.clone();
+                    copy.reached_nodes.clear();
+                    copy
+                })
+                .collect();
+            (signals, now)
+        };
+
+        if announcements.is_empty() {
+            continue;
+        }
+
+        let mut sent = 0;
+        for signal in announcements {
+            let hash = signal.origin_hash.clone();
+            let msg = TransportMessage::signal(signal, field_time);
+            sent += ctx.transport.broadcast_all(&msg, None).await.len();
+            let _ = hash;
+        }
+
+        if sent > 0 {
+            ctx.journal.record("anti_entropy", json!({ "sends": sent }));
+        }
     }
 }
 

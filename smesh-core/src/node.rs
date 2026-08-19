@@ -211,6 +211,23 @@ impl Node {
     /// the trust that fed it and the die roll that resolved it, so a relay
     /// choice can be journalled and replayed rather than merely observed.
     pub fn relay_decision(&self, signal: &Signal, remaining_hops: u32) -> RelayDecision {
+        let roll = rand::thread_rng().gen::<f64>();
+        self.relay_decision_with(signal, remaining_hops, roll)
+    }
+
+    /// The relay decision with the draw supplied by the caller.
+    ///
+    /// Relaying is the protocol's only genuine coin flip, and hiding the draw
+    /// inside this function made the whole diffusion path impossible to replay.
+    /// Taking it as an argument makes the decision a pure function of state: a
+    /// simulation can sweep seeds, and a failing schedule can be reproduced
+    /// exactly rather than described.
+    pub fn relay_decision_with(
+        &self,
+        signal: &Signal,
+        remaining_hops: u32,
+        roll: f64,
+    ) -> RelayDecision {
         let origin_trust = self.get_trust(&signal.origin_node_id);
         let dampening = if origin_trust > 0.7 { 0.9 } else { 0.7 };
 
@@ -239,10 +256,6 @@ impl Node {
         // Propagation score
         let propagation_score =
             effective * origin_trust * (remaining_hops as f64 / signal.radius as f64);
-
-        // Probabilistic relay decision using cryptographically secure RNG
-        let mut rng = rand::thread_rng();
-        let roll = rng.gen::<f64>();
 
         RelayDecision {
             relay: roll < propagation_score,
@@ -284,6 +297,11 @@ impl Node {
         self.public_key = identity.public_key_hex();
         self.identity = Some(Arc::new(identity));
         self
+    }
+
+    /// Whether this node would relay, for a given draw. Pure.
+    pub fn would_relay(&self, signal: &Signal, remaining_hops: u32, roll: f64) -> bool {
+        self.relay_decision_with(signal, remaining_hops, roll).relay
     }
 
     /// Sign a signal on this node's behalf, if it holds a private key.

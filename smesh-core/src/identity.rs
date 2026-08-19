@@ -357,6 +357,27 @@ mod tests {
     }
 
     #[test]
+    fn an_identity_file_creates_its_parent_directory() {
+        // Found by mutation testing: deleting the `!` in the parent check
+        // survived, because every existing test pointed at a directory that
+        // already existed. A node told to keep its key somewhere new should not
+        // fail on the missing directory.
+        let dir = std::env::temp_dir()
+            .join(format!("smesh-id-nested-{}", std::process::id()))
+            .join("deeper");
+        std::fs::remove_dir_all(dir.parent().unwrap()).ok();
+        let path = dir.join("node.key");
+
+        let identity = NodeIdentity::load_or_create(&path, "latency").unwrap();
+        assert!(path.exists(), "the key file was not written");
+
+        let again = NodeIdentity::load_or_create(&path, "latency").unwrap();
+        assert_eq!(identity.public_key_hex(), again.public_key_hex());
+
+        std::fs::remove_dir_all(dir.parent().unwrap()).ok();
+    }
+
+    #[test]
     fn an_identity_survives_a_restart() {
         let dir = std::env::temp_dir().join(format!("smesh-id-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

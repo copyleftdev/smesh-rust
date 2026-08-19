@@ -1,0 +1,44 @@
+# Mutation testing scope.
+#
+# Deliberately narrow. cargo-mutants rebuilds and reruns the suite for every
+# mutant, so cost scales with (mutants x suite time) and an unscoped run over
+# this workspace is hours of full-core load. The question worth paying for is
+# "do the tests actually catch a broken protocol", so only protocol code is
+# mutated. Demo, film and CLI plumbing are excluded: mutating them measures the
+# demo's test coverage, which nobody is relying on.
+
+examine_globs = [
+    "smesh-core/src/signal.rs",
+    "smesh-core/src/identity.rs",
+    "smesh-core/src/node.rs",
+    "smesh-runtime/src/mesh.rs",
+    "smesh-runtime/src/journal.rs",
+]
+
+exclude_globs = [
+    "smesh-cli/**",
+    "smesh-bounty/**",
+    "smesh-agent/**",
+    "film/**",
+    "reference/**",
+    "**/benches/**",
+]
+
+# Mutants inside a test are not interesting. `Debug` bodies are cosmetic, and
+# mutating them only ever reports that nobody asserts on debug output.
+exclude_re = [
+    "mod tests",
+    "impl Default",
+    "impl std::fmt::Debug",
+]
+
+# Known unkillable: this crate has `#[cfg(unix)]` / `#[cfg(not(unix))]` pairs
+# for filesystem permissions. Mutating the branch that is not compiled on this
+# platform can never be caught, and cargo-mutants cannot tell the two apart by
+# name. Treat a survivor in `write_private` or `reject_if_world_readable` as a
+# platform artifact rather than a coverage gap.
+
+# A mutant that makes the code hang must not hold a slot forever. Multiplier
+# over the measured baseline run.
+timeout_multiplier = 4.0
+minimum_test_timeout = 30

@@ -1,0 +1,79 @@
+name: Deep verification
+
+# Deliberately not on every push. These layers are expensive, and a slow
+# required check is one people learn to ignore. They run nightly and on demand,
+# and they report rather than block.
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+    inputs:
+      dst_seeds:
+        description: "Simulation seeds to sweep"
+        default: "2000"
+
+concurrency:
+  group: deep-verification
+  cancel-in-progress: true
+
+jobs:
+  simulation:
+    name: deterministic simulation soak
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Sweep seeds
+        # Every seed is a different delivery order, delay pattern and set of
+        # relay coin flips. A failure names the seed, which is the whole point:
+        # it reproduces exactly rather than being described.
+        env:
+          SMESH_DST_SEEDS: ${{ inputs.dst_seeds || '2000' }}
+        run: cargo test -p smesh-core --test dst --release
+
+  mutation:
+    name: mutation testing
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants --locked
+
+      - name: Mutate the protocol
+        # Scope is in .cargo/mutants.toml: protocol crates only. Two jobs, not
+        # one per core — the runner has two, and oversubscribing a rebuild-per-
+        # mutant workload makes it slower, not faster.
+        run: cargo mutants --jobs 2 --no-shuffle --output target/mutants
+        continue-on-error: true
+
+      - name: Report survivors
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, sys
+          p = pathlib.Path("target/mutants/mutants.out/outcomes.json")
+          if not p.exists():
+              print("no outcomes produced"); sys.exit(0)
+          d = json.loads(p.read_text())
+          missed = [o for o in d["outcomes"] if o.get("summary") == "MissedMutant"]
+          print(f"{len(d['outcomes'])} mutants, {len(missed)} survived\n")
+          for o in missed:
+              m = o["scenario"]["Mutant"]
+              print(f"  survived: {m['file']}:{m['function']['function_name']}")
+          print("\nA survivor means the tests would not notice that change.")
+          print("Known artifact: cfg(not(unix)) branches cannot run on this platform.")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutation-outcomes
+          path: target/mutants/mutants.out/outcomes.json
+          retention-days: 14
