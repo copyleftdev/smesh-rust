@@ -47,6 +47,12 @@ pub enum DecayFunction {
     Step,
 }
 
+/// Most attesters a single signal will carry.
+///
+/// Attestations arrive from peers and are relayed onward, so an unbounded list
+/// is something one peer can grow at everyone else's expense.
+pub const MAX_ATTESTATIONS: usize = 64;
+
 /// A signal in the SMESH field
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Signal {
@@ -202,15 +208,24 @@ impl Signal {
     /// Idempotent: a node attesting twice adds nothing, which is what makes
     /// re-assertion safe to do on a timer.
     pub fn attest(&mut self, identity: &NodeIdentity) {
+        let mine = identity.public_key_hex();
+
+        // Skip only if *we* already attested. Matching on name alone let
+        // someone who squatted the name in first block the real holder from
+        // ever signing its own claim.
         if self
             .attestations
             .iter()
-            .any(|a| a.node_id == identity.node_id())
+            .any(|a| a.node_id == identity.node_id() && a.public_key == mine)
         {
             return;
         }
-        let attestation = identity.attest(&self.origin_hash);
-        self.attestations.push(attestation);
+
+        // Drop any impostor entry for this name: we hold the key, they do not.
+        self.attestations
+            .retain(|a| a.node_id != identity.node_id());
+
+        self.attestations.push(identity.attest(&self.origin_hash));
     }
 
     /// Everyone whose signature over this claim actually checks out.
@@ -241,6 +256,14 @@ impl Signal {
         let mut added = Vec::new();
 
         for attestation in incoming {
+            // A peer controls how many of these it sends, and each one costs a
+            // signature verification and a slot in memory that then travels on
+            // to everyone else. Cap it: no real claim needs more attesters than
+            // there are nodes worth listening to.
+            if self.attestations.len() >= MAX_ATTESTATIONS {
+                break;
+            }
+
             if !attestation.verify(&self.origin_hash) {
                 continue;
             }
@@ -467,6 +490,46 @@ impl SignalBuilder {
 mod tests {
     use super::*;
     use crate::PROTOCOL_DNA;
+
+    #[test]
+    fn a_peer_cannot_grow_the_attestation_list_without_bound() {
+        let mut signal = Signal::builder(SignalType::Data)
+            .payload(b"claim".to_vec())
+            .build();
+
+        let flood: Vec<Attestation> = (0..MAX_ATTESTATIONS * 2)
+            .map(|i| NodeIdentity::generate_named(format!("n{i}")).attest(&signal.origin_hash))
+            .collect();
+
+        signal.merge_attestations(&flood);
+        assert_eq!(signal.attestations.len(), MAX_ATTESTATIONS);
+    }
+
+    #[test]
+    fn squatting_a_name_does_not_stop_the_real_holder_signing() {
+        let real = NodeIdentity::generate_named("latency");
+        let impostor = NodeIdentity::generate_named("latency");
+
+        let mut signal = Signal::builder(SignalType::Data)
+            .payload(b"claim".to_vec())
+            .build();
+
+        // The impostor gets there first under the same name.
+        signal.merge_attestations(&[impostor.attest(&signal.origin_hash)]);
+        real.attest(&signal.origin_hash);
+        signal.attest(&real);
+
+        let keys: Vec<&str> = signal
+            .attestations
+            .iter()
+            .map(|a| a.public_key.as_str())
+            .collect();
+        assert!(
+            keys.contains(&real.public_key_hex().as_str()),
+            "the real holder must still be able to sign its own claim"
+        );
+        assert_eq!(signal.verified_attesters(), vec!["latency".to_string()]);
+    }
 
     #[test]
     fn test_signal_dna_fingerprint() {

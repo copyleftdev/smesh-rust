@@ -170,7 +170,13 @@ pub fn payload_preview(payload: &[u8], max_bytes: usize) -> Value {
     }
 
     if text.len() > max_bytes {
-        json!(format!("{}…", &text[..max_bytes]))
+        // Slicing by byte count splits multi-byte characters and panics. The
+        // payload comes off a socket, so that is a peer-triggerable crash.
+        let cut = (0..=max_bytes)
+            .rev()
+            .find(|i| text.is_char_boundary(*i))
+            .unwrap_or(0);
+        json!(format!("{}…", &text[..cut]))
     } else {
         json!(text)
     }
@@ -189,6 +195,14 @@ impl std::fmt::Debug for Journal {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_truncated_payload_never_splits_a_character() {
+        // A peer choosing the payload chooses where the cut lands.
+        let multibyte = "é".repeat(100);
+        let preview = payload_preview(multibyte.as_bytes(), 51);
+        assert!(preview.is_string());
+    }
 
     #[test]
     fn disabled_journal_records_nothing() {

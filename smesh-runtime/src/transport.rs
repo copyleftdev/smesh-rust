@@ -375,28 +375,42 @@ impl rustls::server::danger::ClientCertVerifier for RecordAnyClientCert {
 
     fn verify_tls12_signature(
         &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        rustls::crypto::verify_tls12_signature(message, cert, dss, &signature_algorithms())
     }
 
     fn verify_tls13_signature(
         &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        rustls::crypto::verify_tls13_signature(message, cert, dss, &signature_algorithms())
     }
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        vec![rustls::SignatureScheme::ED25519]
+        signature_algorithms().supported_schemes()
     }
 }
 
-/// Skip server certificate verification (P2P nodes use self-signed certs)
+/// Algorithms used to check handshake signatures.
+fn signature_algorithms() -> rustls::crypto::WebPkiSupportedAlgorithms {
+    rustls::crypto::ring::default_provider().signature_verification_algorithms
+}
+
+/// Accepts any certificate *chain*, but still proves the peer holds its key.
+///
+/// Every node signs its own certificate, so there is no authority to validate a
+/// chain against and `verify_server_cert` cannot reject on trust. What must not
+/// be skipped is the handshake signature: it is the only thing demonstrating the
+/// peer holds the private key for the certificate it presented. Returning
+/// `assertion()` there — as this did — would let anyone replay a certificate
+/// they had merely observed, and the mesh's channel binding checks the key in
+/// that certificate against the identity the peer claims. Skipping the
+/// signature would have made that check prove nothing.
 #[derive(Debug)]
 struct SkipServerVerification;
 
@@ -414,31 +428,24 @@ impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
 
     fn verify_tls12_signature(
         &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        rustls::crypto::verify_tls12_signature(message, cert, dss, &signature_algorithms())
     }
 
     fn verify_tls13_signature(
         &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        rustls::crypto::verify_tls13_signature(message, cert, dss, &signature_algorithms())
     }
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        vec![
-            rustls::SignatureScheme::RSA_PKCS1_SHA256,
-            rustls::SignatureScheme::RSA_PKCS1_SHA384,
-            rustls::SignatureScheme::RSA_PKCS1_SHA512,
-            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
-            rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
-            rustls::SignatureScheme::ED25519,
-        ]
+        signature_algorithms().supported_schemes()
     }
 }
 
@@ -943,10 +950,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_oversized_frame_is_rejected_before_allocation() {
-        // A peer claiming a 4 GiB body must be refused on the length prefix
-        // alone, never by allocating the buffer it asked for.
-        let listener = QuicTransport::new(
+    async fn an_oversized_length_prefix_is_refused_before_allocating() {
+        // The length prefix is attacker-controlled. This drives `handle_stream`
+        // directly rather than asserting a connection still exists, which the
+        // previous version did and which told us nothing about the size check.
+        let mut listener = QuicTransport::new(
             TransportConfig {
                 bind_addr: "127.0.0.1:0".parse().unwrap(),
                 max_message_size: 1024,
@@ -956,11 +964,9 @@ mod tests {
         )
         .await
         .unwrap();
+        let mut incoming = listener.take_incoming().unwrap();
         let addr = listener.local_addr().unwrap();
-
-        let accept = tokio::spawn(async move {
-            listener.run_accept_loop().await;
-        });
+        let accept = tokio::spawn(async move { listener.run_accept_loop().await });
 
         let dialer = QuicTransport::new(
             TransportConfig {
@@ -973,8 +979,63 @@ mod tests {
         .unwrap();
         dialer.connect(addr).await.unwrap();
 
-        // Oversized frames are refused; the connection itself stays usable.
-        assert_eq!(dialer.peer_count().await, 1);
+        // Claim four gigabytes, send nothing.
+        let connection = dialer.connections.read().await.get(&addr).cloned().unwrap();
+        let mut stream = connection.open_uni().await.unwrap();
+        stream.write_all(&u32::MAX.to_be_bytes()).await.unwrap();
+        stream.finish().unwrap();
+
+        // Nothing should ever be delivered for that frame.
+        let delivered = tokio::time::timeout(Duration::from_millis(600), incoming.recv()).await;
+        assert!(
+            delivered.is_err(),
+            "an oversized frame must never reach the application"
+        );
+
+        accept.abort();
+    }
+
+    #[tokio::test]
+    async fn a_frame_within_the_limit_is_delivered() {
+        // The counterpart, so the test above is not passing merely because
+        // nothing ever arrives.
+        let mut listener = QuicTransport::new(
+            TransportConfig {
+                bind_addr: "127.0.0.1:0".parse().unwrap(),
+                max_message_size: 1024 * 1024,
+                ..Default::default()
+            },
+            NodeIdentity::generate().to_pkcs8_der(),
+        )
+        .await
+        .unwrap();
+        let mut incoming = listener.take_incoming().unwrap();
+        let addr = listener.local_addr().unwrap();
+        let listener = Arc::new(listener);
+        let accept = {
+            let listener = Arc::clone(&listener);
+            tokio::spawn(async move { listener.run_accept_loop().await })
+        };
+
+        let dialer = QuicTransport::new(
+            TransportConfig {
+                bind_addr: "127.0.0.1:0".parse().unwrap(),
+                ..Default::default()
+            },
+            NodeIdentity::generate().to_pkcs8_der(),
+        )
+        .await
+        .unwrap();
+        dialer
+            .send(addr, TransportMessage::Ping { timestamp: 42 })
+            .await
+            .unwrap();
+
+        let (_, msg) = tokio::time::timeout(Duration::from_secs(5), incoming.recv())
+            .await
+            .expect("a frame within the limit should arrive")
+            .expect("channel open");
+        assert!(matches!(msg, TransportMessage::Ping { timestamp: 42 }));
 
         accept.abort();
     }

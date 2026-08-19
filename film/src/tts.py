@@ -29,7 +29,16 @@ def synth(seg, prev_text, next_text, path):
         headers={'xi-api-key': KEY, 'Content-Type': 'application/json'},
     )
     with urllib.request.urlopen(req, timeout=180) as resp:
-        open(path, 'wb').write(resp.read())
+        data = resp.read()
+
+    # Write then rename. A failure partway through used to leave a short file
+    # that the next run treated as finished, which silently shifted every later
+    # segment's offset and drifted the picture against the voice.
+    os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+    tmp = f'{path}.part'
+    with open(tmp, 'wb') as fh:
+        fh.write(data)
+    os.replace(tmp, path)
 
 def duration(path):
     out = subprocess.run(

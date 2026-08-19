@@ -31,6 +31,17 @@ impl Report {
     pub fn is_valid(&self) -> bool {
         self.errors.is_empty()
     }
+
+    /// Record that an invariant held, unless this check just failed it.
+    ///
+    /// Checks used to append their pass line unconditionally, so a failing run
+    /// printed `ok` and `FAIL` for the same invariant — with the `ok` first,
+    /// which is the line a reader believes.
+    fn passed_unless_failed(&mut self, errors_before: usize, message: impl Into<String>) {
+        if self.errors.len() == errors_before {
+            self.checks_passed.push(message.into());
+        }
+    }
 }
 
 fn str_field<'a>(event: &'a JournalEvent, key: &str) -> Option<&'a str> {
@@ -68,6 +79,7 @@ pub fn validate(events: &[JournalEvent]) -> Report {
 /// signatures failed to check out is a run whose headline numbers cannot be
 /// taken at face value, even if every other invariant holds.
 fn check_attestations(events: &[JournalEvent], report: &mut Report) {
+    let errors_before = report.errors.len();
     let unverifiable: u64 = events
         .iter()
         .filter(|e| e.kind == "signal_received")
@@ -110,9 +122,12 @@ fn check_attestations(events: &[JournalEvent], report: &mut Report) {
         ));
     }
 
-    report.checks_passed.push(format!(
-        "every counted attester was signature-backed across {handshakes} key-bound handshakes"
-    ));
+    report.passed_unless_failed(
+        errors_before,
+        format!(
+            "every counted attester was signature-backed across {handshakes} key-bound handshakes"
+        ),
+    );
 }
 
 /// The merged file must be ordered, or a replay would jump backwards in time.
@@ -135,6 +150,7 @@ fn check_merge_order(events: &[JournalEvent], report: &mut Report) {
 
 /// Each node's own log must be gapless, or events were lost.
 fn check_per_node_sequences(by_node: &BTreeMap<&str, Vec<&JournalEvent>>, report: &mut Report) {
+    let errors_before = report.errors.len();
     for (node, node_events) in by_node {
         let mut seqs: Vec<u64> = node_events.iter().map(|e| e.seq).collect();
         seqs.sort_unstable();
@@ -164,13 +180,15 @@ fn check_per_node_sequences(by_node: &BTreeMap<&str, Vec<&JournalEvent>>, report
             last = event.t_ms;
         }
     }
-    report
-        .checks_passed
-        .push("every node's sequence is gapless and time-ordered".to_string());
+    report.passed_unless_failed(
+        errors_before,
+        "every node's sequence is gapless and time-ordered",
+    );
 }
 
 /// Every node must open and close its own log.
 fn check_lifecycle(by_node: &BTreeMap<&str, Vec<&JournalEvent>>, report: &mut Report) {
+    let errors_before = report.errors.len();
     for (node, node_events) in by_node {
         let first = node_events.iter().min_by_key(|e| e.seq);
         let has_stop = node_events.iter().any(|e| e.kind == "node_stopped");
@@ -190,13 +208,12 @@ fn check_lifecycle(by_node: &BTreeMap<&str, Vec<&JournalEvent>>, report: &mut Re
                 .push(format!("{node}: no node_stopped — process ended early?"));
         }
     }
-    report
-        .checks_passed
-        .push("every node opened with node_started".to_string());
+    report.passed_unless_failed(errors_before, "every node opened with node_started");
 }
 
 /// Field snapshots must advance, so decay curves interpolate correctly.
 fn check_snapshots(by_node: &BTreeMap<&str, Vec<&JournalEvent>>, report: &mut Report) {
+    let errors_before = report.errors.len();
     for (node, node_events) in by_node {
         let mut last_tick = 0u64;
         for event in node_events.iter().filter(|e| e.kind == "field_snapshot") {
@@ -215,13 +232,12 @@ fn check_snapshots(by_node: &BTreeMap<&str, Vec<&JournalEvent>>, report: &mut Re
             last_tick = tick;
         }
     }
-    report
-        .checks_passed
-        .push("field snapshots advance monotonically".to_string());
+    report.passed_unless_failed(errors_before, "field snapshots advance monotonically");
 }
 
 /// Anything a node reports holding must have arrived by a recorded route.
 fn check_receipts(by_node: &BTreeMap<&str, Vec<&JournalEvent>>, report: &mut Report) {
+    let errors_before = report.errors.len();
     for (node, node_events) in by_node {
         let mut ordered: Vec<&&JournalEvent> = node_events.iter().collect();
         ordered.sort_by_key(|e| e.seq);
@@ -259,9 +275,10 @@ fn check_receipts(by_node: &BTreeMap<&str, Vec<&JournalEvent>>, report: &mut Rep
             ));
         }
     }
-    report
-        .checks_passed
-        .push("every signal a node held was emitted or accepted there first".to_string());
+    report.passed_unless_failed(
+        errors_before,
+        "every signal a node held was emitted or accepted there first",
+    );
 }
 
 /// Every recorded send should show up as a receive on the named peer.
@@ -270,6 +287,7 @@ fn check_deliveries(
     by_node: &BTreeMap<&str, Vec<&JournalEvent>>,
     report: &mut Report,
 ) {
+    let errors_before = report.errors.len();
     // (receiving node, hash) -> number of receives recorded.
     let mut receipts: HashMap<(String, String), usize> = HashMap::new();
     for event in events.iter().filter(|e| e.kind == "signal_received") {
@@ -315,13 +333,15 @@ fn check_deliveries(
         ));
     }
 
-    report
-        .checks_passed
-        .push(format!("{total} sends resolve to a named peer in this run"));
+    report.passed_unless_failed(
+        errors_before,
+        format!("{total} sends resolve to a named peer in this run"),
+    );
 }
 
 /// Consensus must be justified by what that node had already seen.
 fn check_consensus(by_node: &BTreeMap<&str, Vec<&JournalEvent>>, report: &mut Report) {
+    let errors_before = report.errors.len();
     let mut announcements = 0usize;
 
     for (node, node_events) in by_node {
@@ -377,9 +397,10 @@ fn check_consensus(by_node: &BTreeMap<&str, Vec<&JournalEvent>>, report: &mut Re
         }
     }
 
-    report.checks_passed.push(format!(
-        "{announcements} consensus declarations are justified by prior receipts"
-    ));
+    report.passed_unless_failed(
+        errors_before,
+        format!("{announcements} consensus declarations are justified by prior receipts"),
+    );
 }
 
 /// Print a report for a human.

@@ -342,7 +342,8 @@ async fn check_consensus(
     let network = network.read().await;
 
     for signal in network.field.signals.values() {
-        let attesters = Node::attesters(signal);
+        // Signatures, not the local name list: this number is the claim.
+        let attesters = signal.verified_attesters();
         if attesters.len() < threshold || announced.contains(&signal.origin_hash) {
             continue;
         }
@@ -396,7 +397,8 @@ async fn record_summary(
         .signals
         .values()
         .map(|signal| {
-            let attesters = Node::attesters(signal);
+            // Signatures, not the local name list: this number is the claim.
+            let attesters = signal.verified_attesters();
             let assertion: Option<Assertion> = serde_json::from_slice(&signal.payload).ok();
             json!({
                 "hash": signal.origin_hash,

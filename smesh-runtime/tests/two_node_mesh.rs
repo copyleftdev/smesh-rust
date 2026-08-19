@@ -69,15 +69,32 @@ impl MeshNode {
         network.field.signals.contains_key(hash)
     }
 
-    async fn signal_count(&self, hash: &str) -> usize {
+    /// How many distinct signals carry this payload.
+    ///
+    /// The previous version counted map keys equal to a hash, which a map can
+    /// never hold more than one of — it asserted nothing. What actually needs
+    /// proving is that one claim does not become several signals.
+    async fn signals_for_payload(&self, payload: &str) -> usize {
         let network = self.runtime.network();
         let network = network.read().await;
         network
             .field
             .signals
-            .keys()
-            .filter(|k| k.as_str() == hash)
+            .values()
+            .filter(|s| s.payload == payload.as_bytes())
             .count()
+    }
+
+    /// Attesters recorded for a claim, in order.
+    async fn attesters_for(&self, hash: &str) -> Vec<String> {
+        let network = self.runtime.network();
+        let network = network.read().await;
+        network
+            .field
+            .signals
+            .get(hash)
+            .map(|s| s.verified_attesters())
+            .unwrap_or_default()
     }
 
     async fn emit(&self, payload: &str) -> String {
@@ -206,7 +223,9 @@ async fn peer_learned_second_hand_is_dialled() {
 
 #[tokio::test]
 async fn flooding_does_not_duplicate_state() {
-    // Fully connected triangle: A's signal can reach C directly and via B.
+    // Fully connected triangle: one claim can reach a node directly and again
+    // via a relay. What must hold is that arriving twice does not become two
+    // signals, and does not inflate the count of who stands behind it.
     let a = MeshNode::start("node-a", vec![]).await;
     let b = MeshNode::start("node-b", vec![a.addr()]).await;
     let c = MeshNode::start("node-c", vec![a.addr(), b.addr()]).await;
@@ -218,23 +237,46 @@ async fn flooding_does_not_duplicate_state() {
     })
     .await;
 
-    let hash = a.emit("consensus please").await;
+    let hash = a.emit_claim("consensus please").await;
 
-    eventually(Duration::from_secs(5), "b and c both have it", || async {
+    eventually(Duration::from_secs(6), "b and c both have it", || async {
         b.has_signal(&hash).await && c.has_signal(&hash).await
     })
     .await;
 
-    // Give any relayed copies time to arrive and be deduped.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // Re-assert repeatedly. Every one of these arrives at nodes that already
+    // hold the claim, by more than one route.
+    for _ in 0..3 {
+        a.emit_claim("consensus please").await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(600)).await;
 
-    // Content addressing is what stops a flood from becoming duplicate state:
-    // a second arrival reinforces the existing signal rather than adding one.
-    assert_eq!(c.signal_count(&hash).await, 1);
-    assert_eq!(b.signal_count(&hash).await, 1);
+    for (name, node) in [("a", &a), ("b", &b), ("c", &c)] {
+        assert_eq!(
+            node.signals_for_payload("consensus please").await,
+            1,
+            "{name} turned one claim into more than one signal"
+        );
 
-    // And the origin never loops back to itself as a new signal.
-    assert_eq!(a.signal_count(&hash).await, 1);
+        let attesters = node.attesters_for(&hash).await;
+        let mut unique = attesters.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(
+            attesters.len(),
+            unique.len(),
+            "{name} recorded the same attester twice: {attesters:?}"
+        );
+        assert!(
+            attesters.len() <= 3,
+            "{name} counted more attesters than there are nodes: {attesters:?}"
+        );
+        assert!(
+            attesters.contains(&"node-a".to_string()),
+            "{name} lost the originator from the attester set"
+        );
+    }
 
     a.shutdown().await;
     b.shutdown().await;

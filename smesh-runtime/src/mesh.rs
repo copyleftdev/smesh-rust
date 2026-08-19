@@ -54,6 +54,11 @@ const RECONNECT_TICK: Duration = Duration::from_millis(500);
 const REFLEXIVE_TICK: Duration = Duration::from_millis(100);
 /// How many of those to wait before giving up and using what we have.
 const REFLEXIVE_TICKS_MAX: u32 = 30;
+/// Largest in-flight age a peer may claim for a signal, in milliseconds.
+///
+/// A day is far beyond any real TTL; anything past it is noise or malice.
+const MAX_SIGNAL_AGE_MS: f64 = 86_400_000.0;
+
 /// How many simultaneous-open attempts before giving up on a peer.
 const PUNCH_ROUNDS: u32 = 4;
 /// How many times the punched-at side tries back.
@@ -130,8 +135,11 @@ impl Backoff {
     /// seconds rather than minutes.
     fn fail(&mut self) {
         self.failures = self.failures.saturating_add(1);
+        // Shift far enough to actually reach the ceiling: 500ms << 6 is 32s,
+        // which the min then clamps to 30s. Stopping at 5 capped it at 16s and
+        // quietly contradicted the documented maximum.
         self.wait = RECONNECT_BASE
-            .saturating_mul(1u32 << self.failures.min(5))
+            .saturating_mul(1u32 << self.failures.min(6))
             .min(RECONNECT_MAX);
         self.waited = Duration::ZERO;
     }
@@ -692,7 +700,28 @@ async fn on_hello(
 async fn refuse(ctx: &MeshCtx, src: SocketAddr) {
     ctx.reconnect.write().await.remove(&src);
     ctx.dialed.write().await.remove(&src);
-    ctx.conn_ids.write().await.remove(&src);
+
+    // Removing the mapping before reaping means the reaper can no longer tell
+    // who this address was, so a peer that had been connected would never be
+    // reported as disconnected. Mark it here instead.
+    let was = ctx.conn_ids.write().await.remove(&src);
+    if let Some(node_id) = was {
+        if ctx
+            .peers
+            .get_peer(&node_id)
+            .await
+            .is_some_and(|p| p.is_connected())
+        {
+            ctx.peers
+                .update_state(&node_id, PeerState::Disconnected)
+                .await;
+            let _ = ctx
+                .event_tx
+                .send(RuntimeEvent::PeerDisconnected { peer_id: node_id })
+                .await;
+        }
+    }
+
     ctx.transport.disconnect(src).await;
 }
 
@@ -1056,7 +1085,15 @@ async fn on_signal(ctx: &MeshCtx, src: SocketAddr, mut signal: Signal, age_secs:
 
         // Rebase decay onto our field clock: the sender told us how old the
         // signal was when it left, not when it was born by their wall clock.
-        signal.created_at = now - chrono::Duration::milliseconds((age_secs * 1000.0) as i64);
+        // age_secs comes off the wire. NaN, infinity or an absurd value would
+        // land the signal's birth at a nonsense instant and corrupt every decay
+        // calculation from then on.
+        let age_ms = if age_secs.is_finite() {
+            (age_secs * 1000.0).clamp(0.0, MAX_SIGNAL_AGE_MS) as i64
+        } else {
+            0
+        };
+        signal.created_at = now - chrono::Duration::milliseconds(age_ms);
         signal.current_intensity = signal.compute_intensity(now);
 
         if network.field.signals.contains_key(&hash) {
@@ -1309,11 +1346,18 @@ async fn forward_signal(
 async fn reconnect_loop(ctx: Arc<MeshCtx>) {
     let mut ticker = tokio::time::interval(RECONNECT_TICK);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut last_pass = tokio::time::Instant::now();
 
     loop {
         ticker.tick().await;
 
         let live: HashSet<SocketAddr> = ctx.transport.connected_addrs().await.into_iter().collect();
+
+        // Charge real elapsed time, not the nominal tick. Dialling can take
+        // seconds, so assuming each pass cost exactly one tick made every
+        // backoff far longer than intended.
+        let elapsed = last_pass.elapsed();
+        last_pass = tokio::time::Instant::now();
 
         let due: Vec<SocketAddr> = {
             let mut reconnect = ctx.reconnect.write().await;
@@ -1323,7 +1367,7 @@ async fn reconnect_loop(ctx: Arc<MeshCtx>) {
                     *backoff = Backoff::ready();
                     continue;
                 }
-                backoff.tick(RECONNECT_TICK);
+                backoff.tick(elapsed);
                 if backoff.due() {
                     due.push(*addr);
                 }
@@ -1331,31 +1375,37 @@ async fn reconnect_loop(ctx: Arc<MeshCtx>) {
             due
         };
 
-        for addr in due {
-            let attempt = ctx
-                .reconnect
-                .read()
-                .await
-                .get(&addr)
-                .map(|b| b.failures + 1)
-                .unwrap_or(1);
+        // Concurrently: one unreachable address used to hold up every other
+        // peer's retry for a whole connect timeout.
+        let attempts = due.into_iter().map(|addr| {
+            let ctx = Arc::clone(&ctx);
+            async move {
+                let attempt = ctx
+                    .reconnect
+                    .read()
+                    .await
+                    .get(&addr)
+                    .map(|b| b.failures + 1)
+                    .unwrap_or(1);
 
-            ctx.journal.record(
-                "reconnect_attempt",
-                json!({ "addr": addr.to_string(), "attempt": attempt }),
-            );
+                ctx.journal.record(
+                    "reconnect_attempt",
+                    json!({ "addr": addr.to_string(), "attempt": attempt }),
+                );
 
-            match dial(&ctx, addr).await {
-                Ok(()) => {
-                    info!("reconnected to {} on attempt {}", addr, attempt);
-                    ctx.journal.record(
-                        "reconnected",
-                        json!({ "addr": addr.to_string(), "attempt": attempt }),
-                    );
+                match dial(&ctx, addr).await {
+                    Ok(()) => {
+                        info!("reconnected to {} on attempt {}", addr, attempt);
+                        ctx.journal.record(
+                            "reconnected",
+                            json!({ "addr": addr.to_string(), "attempt": attempt }),
+                        );
+                    }
+                    Err(e) => debug!("reconnect to {} failed: {}", addr, e),
                 }
-                Err(e) => debug!("reconnect to {} failed: {}", addr, e),
             }
-        }
+        });
+        futures::future::join_all(attempts).await;
     }
 }
 

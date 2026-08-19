@@ -157,7 +157,7 @@ impl SmeshRuntime {
 
         let (handle, transport) = mesh::start(mesh::MeshStartup {
             config,
-            local_node_id: local_node_id.to_string() as NodeId,
+            local_node_id: local_node_id.to_string(),
             local_public_key,
             identity_pkcs8_der,
             network: Arc::clone(&self.network),
@@ -231,6 +231,10 @@ impl SmeshRuntime {
         let attestation = network
             .nodes
             .get(node_id)
+            // Gated on the node's own name/key consistency check. Reaching for
+            // the identity directly bypassed the one guard that stops a node
+            // signing under a name it no longer presents.
+            .filter(|node| node.identity_matches_name())
             .and_then(|n| n.identity.as_ref().map(|identity| identity.attest(&hash)));
 
         if first_assertion {
