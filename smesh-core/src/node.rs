@@ -337,22 +337,6 @@ impl Node {
         out
     }
 
-    /// Decide whether to trigger SMESH+ escalation
-    pub fn should_escalate(&self, signals: &[Signal]) -> bool {
-        if signals.is_empty() {
-            return false;
-        }
-
-        let max_confidence = signals.iter().map(|s| s.confidence).fold(0.0, f64::max);
-        let max_reinforcements = signals
-            .iter()
-            .map(|s| s.reinforcement_count)
-            .max()
-            .unwrap_or(0);
-
-        max_confidence >= self.config.escalation_threshold && max_reinforcements >= 2
-    }
-
     /// Check if this node can sense a signal (above threshold)
     pub fn can_sense(&self, signal: &Signal) -> bool {
         signal.current_intensity >= self.config.sensing_threshold
@@ -430,5 +414,172 @@ mod tests {
         for _ in 0..50 {
             assert_eq!(node.should_relay(&signal, 5), (false, 0.0));
         }
+    }
+
+    // ---- should_reinforce: the evidence threshold ---------------------------
+
+    #[test]
+    fn should_reinforce_weighs_evidence_against_the_threshold() {
+        // Honest node, unknown origin => origin_trust is DEFAULT_TRUST (0.5),
+        // reinforcement_threshold is 0.5.
+        let node = Node::new();
+        let signal = Signal::builder(SignalType::Data).confidence(0.8).build();
+
+        // 0.0 + 0.5*0.8 = 0.4 < 0.5 -> no.
+        assert!(!node.should_reinforce(&signal, 0.0));
+        // 0.2 + 0.5*0.8 = 0.6 >= 0.5 -> yes. This case also separates `+` from
+        // `-` (0.2-0.4=-0.2, no) and `+` from `*` (0.2*0.4=0.08, no).
+        assert!(node.should_reinforce(&signal, 0.2));
+
+        // Exact boundary: confidence 1.0 => 0.5*1.0 = 0.5 >= 0.5 -> yes.
+        // Kills `>=`→`<`, which would flip this to no.
+        let strong = Signal::builder(SignalType::Data).confidence(1.0).build();
+        assert!(node.should_reinforce(&strong, 0.0));
+
+        // origin_trust * confidence, not +/÷: a weak signal (0.5*0.1 = 0.05)
+        // stays under threshold, where `+` (0.6) or `/` (5.0) would clear it.
+        let weak = Signal::builder(SignalType::Data).confidence(0.1).build();
+        assert!(!node.should_reinforce(&weak, 0.0));
+    }
+
+    #[test]
+    fn malicious_false_reinforce_is_an_or_not_reached_by_honest_nodes() {
+        // A malicious node whose behavior is NOT FalseReinforce must still fall
+        // through to the evidence test. If the guard's `&&` became `||`, an
+        // Eclipse node would suddenly reinforce everything.
+        let mut node = Node::new();
+        node.make_malicious(MaliciousBehavior::Eclipse);
+        let weak = Signal::builder(SignalType::Data).confidence(0.1).build();
+        assert!(
+            !node.should_reinforce(&weak, 0.0),
+            "only FalseReinforce shortcuts the threshold, not any malice"
+        );
+    }
+
+    // ---- relay_decision_with: a pure function of state ----------------------
+
+    #[test]
+    fn relay_score_and_roll_boundary_are_exact() {
+        let mut node = Node::new();
+        node.set_trust("origin", 0.8);
+        let mut signal = Signal::builder(SignalType::Data)
+            .confidence(1.0)
+            .radius(4)
+            .build();
+        signal.origin_node_id = "origin".to_string();
+        signal.current_intensity = 1.0;
+
+        // effective(1.0) * trust(0.8) * (hops 2 / radius 4 = 0.5) = 0.4.
+        // Pinning the score kills every arithmetic mutant in it at once.
+        let d = node.relay_decision_with(&signal, 2, 0.3);
+        assert!((d.propagation_score - 0.4).abs() < 1e-9);
+        assert!(d.relay, "roll 0.3 < score 0.4 relays");
+
+        // Roll exactly equal to the score must NOT relay (`<`, not `<=`).
+        let edge = node.relay_decision_with(&signal, 2, 0.4);
+        assert!(!edge.relay, "roll == score does not relay");
+
+        let over = node.relay_decision_with(&signal, 2, 0.5);
+        assert!(!over.relay);
+    }
+
+    #[test]
+    fn relay_dampening_switches_on_high_trust() {
+        let mut node = Node::new();
+        let mut signal = Signal::builder(SignalType::Data).confidence(1.0).build();
+        signal.current_intensity = 1.0;
+        signal.origin_node_id = "o".to_string();
+
+        // trust > 0.7 -> 0.9, else 0.7. Test both sides and the boundary.
+        node.set_trust("o", 0.8);
+        assert_eq!(node.relay_decision_with(&signal, 5, 0.99).dampening, 0.9);
+        node.set_trust("o", 0.5);
+        assert_eq!(node.relay_decision_with(&signal, 5, 0.99).dampening, 0.7);
+        // Exactly 0.7 is NOT greater than 0.7 -> low dampening (kills `>`→`>=`).
+        node.set_trust("o", 0.7);
+        assert_eq!(node.relay_decision_with(&signal, 5, 0.99).dampening, 0.7);
+    }
+
+    #[test]
+    fn relay_vetoes_when_the_hop_budget_is_gone() {
+        let node = Node::new();
+        let signal = Signal::builder(SignalType::Data).confidence(1.0).build();
+        // Zero remaining hops is a hard veto regardless of the roll.
+        let d = node.relay_decision_with(&signal, 0, 0.0);
+        assert!(!d.relay && d.veto.is_some());
+    }
+
+    // ---- attesters: origin plus unique reinforcers --------------------------
+
+    #[test]
+    fn attesters_lists_origin_first_then_dedups_reinforcers() {
+        let mut signal = Signal::builder(SignalType::Data).build();
+        signal.origin_node_id = "origin".to_string();
+        signal.reinforced_by = vec!["r1".into(), "r2".into(), "r1".into()];
+
+        let a = Node::attesters(&signal);
+        assert_eq!(
+            a,
+            vec!["origin", "r1", "r2"],
+            "origin leads, duplicates drop"
+        );
+
+        // An empty origin is not listed (the `!is_empty` guard).
+        let mut anon = Signal::builder(SignalType::Data).build();
+        anon.origin_node_id = String::new();
+        anon.reinforced_by = vec!["r1".into()];
+        assert_eq!(Node::attesters(&anon), vec!["r1"]);
+    }
+
+    // ---- can_sense: intensity above the sensing threshold -------------------
+
+    #[test]
+    fn can_sense_respects_the_threshold_boundary() {
+        let node = Node::new(); // sensing_threshold 0.1
+        let mut signal = Signal::builder(SignalType::Data).build();
+
+        signal.current_intensity = 0.0;
+        assert!(!node.can_sense(&signal), "silence is not sensed");
+        signal.current_intensity = 0.1;
+        assert!(node.can_sense(&signal), "exactly at threshold is sensed");
+        signal.current_intensity = 0.05;
+        assert!(!node.can_sense(&signal), "below threshold is not sensed");
+    }
+
+    // ---- set_trust: direct assignment, clamped ------------------------------
+
+    #[test]
+    fn set_trust_assigns_and_clamps() {
+        let mut node = Node::new();
+        node.set_trust("peer", 0.42);
+        assert!(
+            (node.get_trust("peer") - 0.42).abs() < 1e-9,
+            "value is stored"
+        );
+        node.set_trust("peer", 5.0);
+        assert_eq!(node.get_trust("peer"), MAX_TRUST, "clamped to the ceiling");
+        node.set_trust("peer", -5.0);
+        assert_eq!(node.get_trust("peer"), MIN_TRUST, "clamped to the floor");
+    }
+
+    // ---- identity binding ---------------------------------------------------
+
+    #[test]
+    fn named_node_matches_its_name_and_a_reassigned_id_does_not() {
+        let node = Node::named("alice");
+        assert_eq!(node.id, "alice", "the name is the node id");
+        assert!(!node.public_key.is_empty(), "a keypair was generated");
+        assert!(
+            node.identity_matches_name(),
+            "a named node signs under the name it presents"
+        );
+
+        // Renaming after the fact breaks the binding (the `==` in the check).
+        let mut renamed = Node::named("alice");
+        renamed.id = "bob".to_string();
+        assert!(
+            !renamed.identity_matches_name(),
+            "the key still signs for 'alice', so the binding is broken"
+        );
     }
 }

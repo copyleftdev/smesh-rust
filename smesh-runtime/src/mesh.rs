@@ -1573,3 +1573,48 @@ fn now_millis() -> u64 {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Backoff is the reconnect pacer: it must not report "due" until enough
+    // time has been ticked past to cover the current wait, and each failure
+    // must lengthen that wait (doubling, capped at RECONNECT_MAX).
+
+    #[test]
+    fn backoff_starts_ready_and_gates_on_elapsed_time() {
+        let mut b = Backoff::ready();
+        assert!(b.due(), "a fresh backoff is immediately ready");
+
+        b.fail();
+        assert!(!b.due(), "after a failure it must wait before the next try");
+
+        // Ticking less than the wait keeps it gated; ticking past it opens.
+        b.tick(RECONNECT_BASE / 2);
+        assert!(!b.due(), "half the wait is not enough");
+        b.tick(RECONNECT_BASE * 4);
+        assert!(b.due(), "once elapsed >= wait it is due again");
+    }
+
+    #[test]
+    fn backoff_lengthens_with_each_failure_and_caps() {
+        let mut b = Backoff::ready();
+        b.fail();
+        let first = b.wait;
+        b.fail();
+        let second = b.wait;
+        assert!(second > first, "each failure backs off further");
+        // Hammer it well past the shift ceiling; the wait must clamp, not grow
+        // unbounded or overflow.
+        for _ in 0..20 {
+            b.fail();
+        }
+        assert_eq!(
+            b.wait, RECONNECT_MAX,
+            "the wait is capped at the documented max"
+        );
+        // fail() resets the elapsed counter, so a just-failed backoff is not due.
+        assert!(!b.due());
+    }
+}

@@ -239,6 +239,55 @@ mod tests {
         // t_ms is relative to the shared run epoch, so it starts near zero.
         assert!(events[0].t_ms >= 0 && events[0].t_ms < 60_000);
 
+        // The constructed journal is a live file sink that knows its node.
+        assert!(journal.is_enabled(), "a file-backed journal is enabled");
+        assert_eq!(journal.node(), "latency");
+
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn t_ms_is_now_minus_epoch_not_divided_by_it() {
+        // With epoch == now the correct offset (0) and a `/`-mutated offset (1)
+        // both fall under a loose bound, so the subtraction has to be pinned
+        // against an epoch a known distance in the past.
+        let dir = std::env::temp_dir().join(format!("smesh-journal-tms-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("node.jsonl");
+
+        let epoch = chrono::Utc::now().timestamp_millis() - 10_000; // 10s ago
+        let journal = Journal::create(&path, "n", None, epoch).unwrap();
+        journal.record("k", json!({}));
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        let event: JournalEvent = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+        // now - (now - 10_000) ≈ 10_000. A `/` would give 1; a `+` would give a
+        // number near 2*now. Only the subtraction lands in this window.
+        assert!(
+            event.t_ms > 5_000 && event.t_ms < 30_000,
+            "t_ms was {}, expected ~10_000",
+            event.t_ms
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn payload_preview_truncates_only_past_the_limit() {
+        // Exactly at the limit is kept whole; one byte over is cut. This pins
+        // the `>` boundary against `>=`, `==` and `<`.
+        let ten = "a".repeat(10);
+        assert_eq!(
+            payload_preview(ten.as_bytes(), 10),
+            json!("aaaaaaaaaa"),
+            "length == limit is not truncated"
+        );
+        let eleven = "a".repeat(11);
+        let cut = payload_preview(eleven.as_bytes(), 10);
+        assert_eq!(
+            cut,
+            json!("aaaaaaaaaa…"),
+            "length > limit is truncated with an ellipsis"
+        );
     }
 }

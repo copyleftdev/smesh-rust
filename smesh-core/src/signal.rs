@@ -153,13 +153,9 @@ impl Signal {
                 let midpoint = self.ttl / 2.0;
                 self.intensity / (1.0 + ((age - midpoint) * self.decay_rate).exp())
             }
-            DecayFunction::Step => {
-                if age < self.ttl {
-                    self.intensity
-                } else {
-                    0.0
-                }
-            }
+            // Full intensity until expiry. The `age >= ttl` case already
+            // returned 0.0 above, so no inner check is needed or reachable.
+            DecayFunction::Step => self.intensity,
         }
     }
 
@@ -293,20 +289,6 @@ impl Signal {
         propagated.current_intensity *= dampening;
         propagated.hops += 1;
         propagated
-    }
-
-    /// Get payload as TOON string (for debugging/display)
-    ///
-    /// Returns None if payload is not valid UTF-8.
-    pub fn payload_as_toon_str(&self) -> Option<&str> {
-        std::str::from_utf8(&self.payload).ok()
-    }
-
-    /// Decode payload as JSON format
-    ///
-    /// Returns None if payload is not valid JSON or cannot be deserialized.
-    pub fn payload_as_json<T: for<'de> Deserialize<'de>>(&self) -> Option<T> {
-        serde_json::from_slice(&self.payload).ok()
     }
 
     /// Get payload as UTF-8 string
@@ -627,5 +609,194 @@ mod tests {
         assert_eq!(propagated.hops, 1);
         assert_ne!(propagated.id, signal.id);
         assert_eq!(propagated.origin_hash, signal.origin_hash);
+    }
+
+    // ---- decay math, pinned to exact values --------------------------------
+    //
+    // The older decay tests assert within a wide tolerance and cover only two
+    // of the four curves. That leaves the arithmetic free to be wrong: a `/`
+    // flipped to `*`, a `-` to `+`, the Sigmoid and Step arms untouched. These
+    // pin each curve to a value computed independently of the code under test,
+    // so a mutated operator lands outside the tolerance rather than inside it.
+
+    fn at(signal: &Signal, secs: i64) -> f64 {
+        signal.compute_intensity(signal.created_at + chrono::Duration::seconds(secs))
+    }
+
+    #[test]
+    fn exponential_curve_is_pinned_at_several_ages() {
+        let s = Signal::builder(SignalType::Data)
+            .intensity(1.0)
+            .decay_rate(0.2)
+            .ttl(1000.0)
+            .decay_function(DecayFunction::Exponential)
+            .build();
+        // e^(-0.2 * age). Independent reference values.
+        assert!((at(&s, 0) - 1.0).abs() < 1e-9, "age 0 is undecayed");
+        assert!((at(&s, 5) - (-1.0f64).exp()).abs() < 1e-9, "0.2*5 = 1.0");
+        assert!((at(&s, 10) - (-2.0f64).exp()).abs() < 1e-9, "0.2*10 = 2.0");
+        // A larger rate must decay faster at the same age — kills `*`↔`/` and
+        // `-`-sign mutants on the exponent that a single-point test misses.
+        let faster = Signal::builder(SignalType::Data)
+            .intensity(1.0)
+            .decay_rate(0.4)
+            .ttl(1000.0)
+            .decay_function(DecayFunction::Exponential)
+            .build();
+        assert!(at(&faster, 10) < at(&s, 10));
+    }
+
+    #[test]
+    fn linear_curve_is_pinned_and_reaches_zero_at_ttl() {
+        let s = Signal::builder(SignalType::Data)
+            .intensity(1.0)
+            .ttl(100.0)
+            .decay_function(DecayFunction::Linear)
+            .build();
+        assert!((at(&s, 0) - 1.0).abs() < 1e-9);
+        assert!((at(&s, 25) - 0.75).abs() < 1e-9, "1 - 25/100");
+        assert!((at(&s, 50) - 0.5).abs() < 1e-9, "1 - 50/100");
+        assert!((at(&s, 75) - 0.25).abs() < 1e-9, "1 - 75/100");
+    }
+
+    #[test]
+    fn sigmoid_curve_is_pinned_at_and_around_its_midpoint() {
+        let s = Signal::builder(SignalType::Data)
+            .intensity(1.0)
+            .decay_rate(0.1)
+            .ttl(100.0)
+            .decay_function(DecayFunction::Sigmoid)
+            .build();
+        // 1 / (1 + e^((age - 50) * 0.1)). At the midpoint the exponent is 0,
+        // so the value is exactly 1/2 — the one point that fixes the whole arm.
+        assert!((at(&s, 50) - 0.5).abs() < 1e-9, "midpoint is exactly half");
+        // Independent references either side. `*`↔`/`, `-`↔`+` on the exponent
+        // all move these off their marks.
+        let lo = 1.0 / (1.0 + ((40.0 - 50.0) * 0.1f64).exp());
+        let hi = 1.0 / (1.0 + ((60.0 - 50.0) * 0.1f64).exp());
+        assert!((at(&s, 40) - lo).abs() < 1e-9);
+        assert!((at(&s, 60) - hi).abs() < 1e-9);
+        // Monotone decreasing through the midpoint.
+        assert!(at(&s, 40) > at(&s, 50) && at(&s, 50) > at(&s, 60));
+    }
+
+    #[test]
+    fn step_curve_holds_full_intensity_then_drops_to_zero() {
+        let s = Signal::builder(SignalType::Data)
+            .intensity(0.8)
+            .ttl(30.0)
+            .decay_function(DecayFunction::Step)
+            .build();
+        assert!((at(&s, 0) - 0.8).abs() < 1e-9);
+        assert!(
+            (at(&s, 29) - 0.8).abs() < 1e-9,
+            "full intensity right up to ttl"
+        );
+        assert_eq!(at(&s, 30), 0.0, "exactly at ttl is expired");
+        assert_eq!(at(&s, 31), 0.0);
+    }
+
+    #[test]
+    fn intensity_boundaries_hold_before_zero_and_at_ttl() {
+        let s = Signal::builder(SignalType::Data)
+            .intensity(0.9)
+            .ttl(60.0)
+            .decay_function(DecayFunction::Linear)
+            .build();
+        // age < 0 returns the undecayed intensity, not a decayed one.
+        let before = s.compute_intensity(s.created_at - chrono::Duration::seconds(5));
+        assert_eq!(before, 0.9, "a signal from the future has not decayed");
+        // age == ttl returns exactly 0 (the `>=` boundary).
+        assert_eq!(at(&s, 60), 0.0);
+        // age just under ttl is still positive (kills `>=`→`>` shifting the edge).
+        assert!(at(&s, 59) > 0.0);
+    }
+
+    #[test]
+    fn effective_intensity_applies_confidence_and_reinforcement_boost() {
+        let mut s = Signal::builder(SignalType::Data)
+            .intensity(1.0)
+            .confidence(0.5)
+            .ttl(1000.0)
+            .decay_function(DecayFunction::Step)
+            .build();
+        // base 1.0 * confidence 0.5 * boost (1 + 0*0.1) = 0.5.
+        assert!((s.effective_intensity(s.created_at) - 0.5).abs() < 1e-9);
+        // Two reinforcements: boost = 1 + min(2*0.1, 0.5) = 1.2, so 0.6.
+        s.reinforcement_count = 2;
+        assert!((s.effective_intensity(s.created_at) - 0.6).abs() < 1e-9);
+        // The boost saturates at +0.5 and the whole thing is capped at 1.0.
+        s.reinforcement_count = 100;
+        s.confidence = 1.0;
+        assert_eq!(
+            s.effective_intensity(s.created_at),
+            1.0,
+            "capped at 1.0, and boost never exceeds 1.5"
+        );
+    }
+
+    #[test]
+    fn is_expired_fires_on_ttl_and_on_faded_intensity_separately() {
+        // First clause: age >= ttl, independent of intensity.
+        let a = Signal::builder(SignalType::Data)
+            .intensity(1.0)
+            .ttl(10.0)
+            .decay_function(DecayFunction::Step)
+            .build();
+        assert!(!a.is_expired(a.created_at));
+        assert!(a.is_expired(a.created_at + chrono::Duration::seconds(10)));
+
+        // Second clause: still within ttl, but intensity has fallen below 0.01.
+        let b = Signal::builder(SignalType::Data)
+            .intensity(1.0)
+            .decay_rate(1.0)
+            .ttl(1000.0)
+            .decay_function(DecayFunction::Exponential)
+            .build();
+        assert!(!b.is_expired(b.created_at), "fresh signal is live");
+        // e^(-1.0 * 10) ≈ 4.5e-5 < 0.01, but age (10) is far below ttl (1000),
+        // so only the intensity clause can be catching this.
+        assert!(b.is_expired(b.created_at + chrono::Duration::seconds(10)));
+    }
+
+    #[test]
+    fn reinforce_boost_has_diminishing_returns() {
+        let mut s = Signal::builder(SignalType::Data).confidence(0.5).build();
+        s.reinforce("a");
+        // count is now 1: boost = 0.1 / (1 + 1*0.5) = 0.0666..., conf = 0.5666...
+        assert!((s.confidence - (0.5 + 0.1 / 1.5)).abs() < 1e-9);
+        let after_one = s.confidence;
+        s.reinforce("b");
+        // count 2: boost = 0.1 / (1 + 2*0.5) = 0.05 — strictly smaller step.
+        let step_two = s.confidence - after_one;
+        assert!((step_two - 0.05).abs() < 1e-9);
+        assert!(
+            step_two < 0.1 / 1.5,
+            "each reinforcement adds less than the last"
+        );
+    }
+
+    #[test]
+    fn has_reached_treats_empty_as_ambient() {
+        let mut s = Signal::builder(SignalType::Data).build();
+        assert!(s.has_reached("anyone"), "empty reached-set is ambient");
+        s.mark_reached("n1");
+        assert!(s.has_reached("n1"));
+        assert!(
+            !s.has_reached("n2"),
+            "a non-empty set excludes unreached nodes"
+        );
+    }
+
+    #[test]
+    fn propagate_dampens_both_intensity_fields() {
+        let mut s = Signal::builder(SignalType::Data).intensity(1.0).build();
+        s.current_intensity = 0.8;
+        let p = s.propagate(0.5);
+        assert!((p.intensity - 0.5).abs() < 1e-9);
+        assert!(
+            (p.current_intensity - 0.4).abs() < 1e-9,
+            "current_intensity is dampened too, not left untouched or added to"
+        );
     }
 }
