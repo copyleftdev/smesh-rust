@@ -15,6 +15,7 @@ impl ReviewerKey {
     /// Load the keypair at `path`, or generate and persist one (0600).
     pub fn load_or_generate(path: &Path, reviewer: ReviewerId) -> Result<Self, RatifyError> {
         let signing = if path.exists() {
+            Self::reject_if_exposed(path)?;
             let bytes = std::fs::read(path)?;
             let key: [u8; 32] = bytes.as_slice().try_into().map_err(|_| {
                 RatifyError::Key(format!("{} is not a 32-byte seed", path.display()))
@@ -25,15 +26,33 @@ impl ReviewerKey {
                 std::fs::create_dir_all(parent)?;
             }
             let key = SigningKey::generate(&mut rand::rngs::OsRng);
-            std::fs::write(path, key.to_bytes())?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-            }
+            write_private(path, &key.to_bytes())?;
             key
         };
         Ok(Self { reviewer, signing })
+    }
+
+    /// Refuse a key file anyone else on the box can read.
+    ///
+    /// A private key that was briefly world-readable is a private key that may
+    /// already have been copied, and this one authorises every ratification.
+    #[cfg(unix)]
+    fn reject_if_exposed(path: &Path) -> Result<(), RatifyError> {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(path)?.permissions().mode() & 0o077;
+        if mode != 0 {
+            return Err(RatifyError::Key(format!(
+                "{} is readable by others (mode {:o}); refusing to load a signing key",
+                path.display(),
+                mode
+            )));
+        }
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    fn reject_if_exposed(_path: &Path) -> Result<(), RatifyError> {
+        Ok(())
     }
 
     pub fn verifying_key(&self) -> VerifyingKey {
@@ -134,4 +153,29 @@ mod tests {
         ));
         std::fs::remove_file(&path).unwrap();
     }
+}
+
+/// Create secret material already private, rather than fixing it afterwards.
+///
+/// `fs::write` creates with the process umask — usually world-readable — and
+/// relaxing the mode afterwards leaves a window in which the signing key is
+/// readable by anyone on the machine. `create_new` with the mode set up front
+/// closes it, and refuses to clobber an existing key.
+#[cfg(unix)]
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(bytes)
+}
+
+/// Permissions are left to the platform here.
+#[cfg(not(unix))]
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    std::fs::write(path, bytes)
 }

@@ -55,4 +55,6 @@ pub enum WorldError {
     Malformed(String),
     #[error("ratification record does not cover candidate {0}")]
     UnreviewedCandidate(String),
+    #[error("ratification rules on {0}, which is not in this changeset")]
+    ForeignRatification(String),
 }

@@ -9,7 +9,7 @@ use crate::candidate::CandidateEdge;
 use crate::ontology::EdgeKind;
 use crate::WorldError;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ReviewerId(pub String);
@@ -187,19 +187,42 @@ pub struct SignedChangeset {
 
 impl Changeset<Ratified> {
     /// Only reachable through `ratify` — the type system is the protocol.
-    pub fn sign(self, ratification: RatificationRecord) -> SignedChangeset {
+    /// Attach a ratification, refusing one that does not cover these edges.
+    ///
+    /// The reviewer's signature covers the base revision, their identity and
+    /// the decision map — it does not cover the edges. So a record signed for
+    /// one changeset could previously be stapled onto a different one with the
+    /// same base revision, and the result verified, having been approved by
+    /// nobody. The premise of this whole design is that nothing reaches the
+    /// signed graph without a human ratification record; that only holds if the
+    /// record demonstrably concerns *these* edges.
+    ///
+    /// The decision map is signed, so requiring an exact correspondence between
+    /// it and the edges binds the signature to the edge set without changing
+    /// what is signed.
+    pub fn sign(self, ratification: RatificationRecord) -> Result<SignedChangeset, WorldError> {
+        let edge_keys: BTreeSet<String> = self.edges.iter().map(|e| e.key()).collect();
+        let decided: BTreeSet<String> = ratification.decisions.keys().cloned().collect();
+
+        if let Some(missing) = edge_keys.difference(&decided).next() {
+            return Err(WorldError::UnreviewedCandidate(missing.clone()));
+        }
+        if let Some(extra) = decided.difference(&edge_keys).next() {
+            return Err(WorldError::ForeignRatification(extra.clone()));
+        }
+
         let mut hasher = blake3::Hasher::new();
         hasher.update(self.base_rev.as_bytes());
         hasher.update(&ratification.signature.0);
         for edge in &self.edges {
             hasher.update(edge.key().as_bytes());
         }
-        SignedChangeset {
+        Ok(SignedChangeset {
             base_rev: self.base_rev,
             new_rev: hasher.finalize().to_hex().to_string(),
             edges: self.edges,
             ratification,
-        }
+        })
     }
 }
 
@@ -347,13 +370,62 @@ mod tests {
         let outcome = staged
             .ratify(record("dj", vec![(a.key(), ReviewDecision::Approve)]))
             .unwrap();
-        let signed = outcome.changeset.clone().sign(outcome.ratification.clone());
+        let signed = outcome
+            .changeset
+            .clone()
+            .sign(outcome.ratification.clone())
+            .unwrap();
         assert_eq!(signed.base_rev, "rev0");
         assert_eq!(signed.new_rev.len(), 64);
 
         let mut other_sig = outcome.ratification.clone();
         other_sig.signature = Signature(vec![9; 64]);
-        let resigned = outcome.changeset.sign(other_sig);
+        let resigned = outcome.changeset.sign(other_sig).unwrap();
         assert_ne!(signed.new_rev, resigned.new_rev);
+    }
+
+    #[test]
+    fn a_ratification_cannot_be_moved_to_a_changeset_it_did_not_approve() {
+        // The type-state already stops an unratified changeset being signed.
+        // What it does not stop is swapping records between two ratified ones:
+        // the reviewer's signature covers the base revision, their name and the
+        // decisions, not the edges. So a record approving one changeset could
+        // be stapled onto another with the same base, and the result would
+        // verify while having been approved by nobody. That is the single thing
+        // this design promises cannot happen.
+        let d = doc();
+        let approved = edge(&d, "Claims", EdgeKind::ReportsTo, "Ops");
+        let smuggled = edge(&d, "Claims", EdgeKind::ReportsTo, "Finance");
+
+        let honest = Changeset::stage("rev0".into(), vec![approved.clone()])
+            .unwrap()
+            .ratify(record(
+                "dj",
+                vec![(approved.key(), ReviewDecision::Approve)],
+            ))
+            .unwrap();
+
+        // A separate changeset, properly ratified on its own terms.
+        let other = Changeset::stage("rev0".into(), vec![smuggled.clone()])
+            .unwrap()
+            .ratify(record(
+                "dj",
+                vec![(smuggled.key(), ReviewDecision::Approve)],
+            ))
+            .unwrap();
+
+        // Now swap: sign the second changeset with the first one's record.
+        assert_eq!(
+            other
+                .changeset
+                .sign(honest.ratification.clone())
+                .unwrap_err(),
+            WorldError::UnreviewedCandidate(smuggled.key()),
+            "an edge nobody approved must not ride in on someone else's signature"
+        );
+
+        // Its own record still works, so the check rejects the swap and not
+        // every signature.
+        assert!(honest.changeset.sign(honest.ratification).is_ok());
     }
 }

@@ -35,13 +35,19 @@ impl Session {
         decisions_path: PathBuf,
         revision_path: PathBuf,
     ) -> Result<Self, RatifyError> {
+        // Only a missing file means "nothing recorded yet". Treating every
+        // error that way turned a permissions problem or a bad disk into a
+        // clean slate, and the next ratification would overwrite signed state
+        // that was still there and merely unreadable.
         let decisions = match std::fs::read(&decisions_path) {
             Ok(bytes) => serde_json::from_slice(&bytes)?,
-            Err(_) => BTreeMap::new(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
+            Err(e) => return Err(RatifyError::Io(e)),
         };
         let signed = match std::fs::read(&revision_path) {
             Ok(bytes) => Some(serde_json::from_slice(&bytes)?),
-            Err(_) => None,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(RatifyError::Io(e)),
         };
         Ok(Self {
             staged,
@@ -140,7 +146,7 @@ impl Session {
         let changeset =
             Changeset::stage(self.staged.base_rev.clone(), self.staged.candidates.clone())?;
         let outcome = changeset.ratify(record)?;
-        let signed = outcome.changeset.sign(outcome.ratification);
+        let signed = outcome.changeset.sign(outcome.ratification)?;
 
         std::fs::write(&self.revision_path, serde_json::to_vec_pretty(&signed)?)?;
         self.signed = Some(signed.clone());

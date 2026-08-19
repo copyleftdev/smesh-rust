@@ -12,6 +12,12 @@ use smesh_world::corpus::canon;
 use smesh_world::role::ModelPolicy;
 use smesh_world::{CandidateEdge, CdmSpan, Citation, EdgeKind, WorldRole};
 
+/// Shortest quote that can count as grounding a claim.
+///
+/// Not a magic number so much as a floor: below this, a match against the
+/// document says more about the document than about the claim.
+const MIN_QUOTE_CHARS: usize = 8;
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Emission {
     pub subject: String,
@@ -28,10 +34,23 @@ pub struct RejectedEmission {
     pub reason: String,
 }
 
+/// An expert that produced nothing usable at all.
+///
+/// Distinct from a rejected emission: there is no emission to attribute, so
+/// recording it as one would put words in the model's mouth. Kept because this
+/// module's contract is that nothing is silently gone.
+#[derive(Debug, Clone)]
+pub struct ExpertFailure {
+    pub role: WorldRole,
+    pub reason: String,
+}
+
 #[derive(Debug, Default)]
 pub struct ExtractionOutcome {
     pub candidates: Vec<CandidateEdge>,
     pub rejected: Vec<RejectedEmission>,
+    /// Experts whose response could not be parsed at all.
+    pub failures: Vec<ExpertFailure>,
 }
 
 pub(crate) fn kind_from_str(s: &str) -> Option<EdgeKind> {
@@ -63,10 +82,24 @@ pub async fn run_extractors(
                 doc_block,
             )
             .await?;
-        let emissions: Vec<Emission> = serde_json::from_value(extract_json(&response)?)
-            .map_err(|e| RefineryError::Parse(format!("{role:?} emissions: {e}")))?;
-        for emission in emissions {
-            ground(role, emission, docs, &mut outcome);
+        // One expert returning malformed JSON used to abort the entire run and
+        // discard every other expert's work. A model producing something
+        // unparseable is ordinary, not exceptional: record it as that expert
+        // failing and carry on with the rest.
+        let emissions: Result<Vec<Emission>, _> = extract_json(&response)
+            .map_err(|e| e.to_string())
+            .and_then(|v| serde_json::from_value::<Vec<Emission>>(v).map_err(|e| e.to_string()));
+
+        match emissions {
+            Ok(emissions) => {
+                for emission in emissions {
+                    ground(role, emission, docs, &mut outcome);
+                }
+            }
+            Err(e) => outcome.failures.push(ExpertFailure {
+                role,
+                reason: format!("unusable output: {e}"),
+            }),
         }
     }
     Ok(outcome)
@@ -102,6 +135,23 @@ pub fn ground(
             emission,
         );
     };
+    // An empty quote is found at offset zero in every document, so it passes
+    // "appears verbatim" trivially and yields a citation that points at nothing.
+    // The firewall exists to stop exactly that: a claim carrying evidence that
+    // is not evidence. A floor on length is applied for the same reason — a
+    // one-character quote matches by accident, not by grounding.
+    let quote = emission.quote.trim();
+    if quote.chars().count() < MIN_QUOTE_CHARS {
+        return reject(
+            format!(
+                "quote is {} characters; needs at least {MIN_QUOTE_CHARS} to ground anything",
+                quote.chars().count()
+            ),
+            outcome,
+            emission,
+        );
+    }
+
     let Some(start) = named.doc.canonical_text.find(&emission.quote) else {
         return reject(
             "quote not found verbatim in document".into(),

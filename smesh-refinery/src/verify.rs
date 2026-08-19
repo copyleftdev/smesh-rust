@@ -55,7 +55,14 @@ pub async fn audit_grounding(
         let ProvenanceClass::CorpusDerived { citations } = &candidate.provenance else {
             continue;
         };
-        let citation = citations[0].clone();
+        // Indexing panicked on a candidate that reached here with no citations.
+        // The extractor is a language model, so "cannot happen" is a claim about
+        // a model's output rather than about this code.
+        let Some(citation) = citations.first().cloned() else {
+            return Err(RefineryError::Parse(
+                "candidate reached verification with no citation to audit".into(),
+            ));
+        };
         let named = docs
             .iter()
             .find(|d| d.doc.id == citation.doc)
