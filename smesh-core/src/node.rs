@@ -463,24 +463,104 @@ mod tests {
         let mut node = Node::new();
         node.set_trust("origin", 0.8);
         let mut signal = Signal::builder(SignalType::Data)
-            .confidence(1.0)
+            .confidence(0.8)
             .radius(4)
             .build();
         signal.origin_node_id = "origin".to_string();
+        signal.current_intensity = 0.5;
+
+        // Distinct confidence (0.8) and current_intensity (0.5) so the
+        // `effective = confidence * current_intensity` multiply is pinned:
+        // `/` would give 1.6, not 0.4. effective(0.4) * trust(0.8) *
+        // (hops 2 / radius 4 = 0.5) = 0.16.
+        let d = node.relay_decision_with(&signal, 2, 0.1);
+        assert!(
+            (d.propagation_score - 0.16).abs() < 1e-9,
+            "score was {}",
+            d.propagation_score
+        );
+        assert!(d.relay, "roll 0.1 < score 0.16 relays");
+        let over = node.relay_decision_with(&signal, 2, 0.2);
+        assert!(!over.relay, "roll 0.2 > score 0.16 does not relay");
+    }
+
+    #[test]
+    fn relay_roll_boundary_is_strictly_less_than() {
+        // The `<` in `roll < propagation_score` needs a roll EXACTLY equal to
+        // the score to separate it from `<=`. Float equality is only reliable
+        // when the score is an exactly-representable binary fraction, so pick
+        // inputs whose product is 0.5: effective 1.0 * trust 0.5 * (5/5) = 0.5.
+        let mut node = Node::new();
+        node.set_trust("o", 0.5);
+        let mut signal = Signal::builder(SignalType::Data).confidence(1.0).build();
+        signal.origin_node_id = "o".to_string();
         signal.current_intensity = 1.0;
 
-        // effective(1.0) * trust(0.8) * (hops 2 / radius 4 = 0.5) = 0.4.
-        // Pinning the score kills every arithmetic mutant in it at once.
-        let d = node.relay_decision_with(&signal, 2, 0.3);
-        assert!((d.propagation_score - 0.4).abs() < 1e-9);
-        assert!(d.relay, "roll 0.3 < score 0.4 relays");
+        let d = node.relay_decision_with(&signal, 5, 0.5);
+        assert_eq!(d.propagation_score, 0.5, "score is exactly representable");
+        assert!(!d.relay, "roll == score must NOT relay (`<`, not `<=`)");
+        assert!(
+            node.relay_decision_with(&signal, 5, 0.4).relay,
+            "just under relays"
+        );
+    }
 
-        // Roll exactly equal to the score must NOT relay (`<`, not `<=`).
-        let edge = node.relay_decision_with(&signal, 2, 0.4);
-        assert!(!edge.relay, "roll == score does not relay");
+    #[test]
+    fn a_malicious_non_eclipse_node_still_relays() {
+        // The eclipse veto is `is_malicious && behavior == Eclipse`. If that
+        // `&&` became `||`, ANY malicious node would black-hole traffic. A
+        // Spam node (malicious, but not eclipse) must still relay a strong
+        // signal when the roll clears the score.
+        let mut node = Node::new();
+        node.set_trust("o", 0.9);
+        node.make_malicious(MaliciousBehavior::Spam);
+        let mut signal = Signal::builder(SignalType::Data).confidence(1.0).build();
+        signal.origin_node_id = "o".to_string();
+        signal.current_intensity = 1.0;
+        // score = 1.0 * 0.9 * (5/5) = 0.9; roll 0.1 clears it.
+        assert!(
+            node.would_relay(&signal, 5, 0.1),
+            "only an eclipse node black-holes; spam still forwards"
+        );
+        // would_relay must track the decision, not be hard-wired: a roll above
+        // the score does not relay.
+        assert!(!node.would_relay(&signal, 5, 0.95));
+    }
 
-        let over = node.relay_decision_with(&signal, 2, 0.5);
-        assert!(!over.relay);
+    // ---- Node::attest: sign only under the presented name -------------------
+
+    #[test]
+    fn node_attest_signs_when_the_name_matches_and_refuses_when_it_does_not() {
+        let node = Node::named("prober");
+        let mut signal = Signal::builder(SignalType::Data)
+            .payload(b"x".to_vec())
+            .build();
+        node.attest(&mut signal);
+        assert_eq!(
+            signal.verified_attesters(),
+            vec!["prober".to_string()],
+            "a name-matched node contributes a verifiable attestation"
+        );
+
+        // A node whose id was reassigned away from its key must not sign: the
+        // signature would verify but under a name nobody is listening for.
+        let mut mismatched = Node::named("prober2");
+        mismatched.id = "someone-else".to_string();
+        let before = signal.attestations.len();
+        mismatched.attest(&mut signal);
+        assert_eq!(
+            signal.attestations.len(),
+            before,
+            "a name-mismatched node adds nothing"
+        );
+    }
+
+    #[test]
+    fn with_id_sets_the_requested_id() {
+        // Guards the `Default::default()` mutant: the constructor must actually
+        // apply the id, not hand back a default node with a random one.
+        let node = Node::with_id("chosen-id");
+        assert_eq!(node.id, "chosen-id");
     }
 
     #[test]

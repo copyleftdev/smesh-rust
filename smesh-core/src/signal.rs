@@ -510,7 +510,61 @@ mod tests {
             keys.contains(&real.public_key_hex().as_str()),
             "the real holder must still be able to sign its own claim"
         );
+        // Assert on the attestation list itself, not just verified_attesters:
+        // the latter dedups by name and would hide a lingering impostor entry.
+        // The `retain` must have dropped the impostor key, leaving exactly one.
+        assert_eq!(
+            signal.attestations.len(),
+            1,
+            "the impostor entry was dropped"
+        );
+        assert!(
+            !keys.contains(&impostor.public_key_hex().as_str()),
+            "the impostor key must be gone once the real holder signs"
+        );
         assert_eq!(signal.verified_attesters(), vec!["latency".to_string()]);
+    }
+
+    #[test]
+    fn attesting_twice_adds_nothing() {
+        // Idempotency guards the `already attested` check in Signal::attest: if
+        // it broke, a node signing on a timer would grow the list every tick.
+        let node = NodeIdentity::generate_named("sensor");
+        let mut signal = Signal::builder(SignalType::Data)
+            .payload(b"claim".to_vec())
+            .build();
+        signal.attest(&node);
+        signal.attest(&node);
+        signal.attest(&node);
+        assert_eq!(signal.attestations.len(), 1, "re-attesting is a no-op");
+        assert_eq!(signal.verified_attesters().len(), 1);
+    }
+
+    #[test]
+    fn a_signature_over_a_different_claim_is_not_counted() {
+        // verified_attesters gates on `verify(...) && !dup`. If that `&&`
+        // slipped to `||`, an attestation whose signature is for some *other*
+        // claim would be counted here. Forge exactly that: sign a different
+        // origin hash, then splice the entry in.
+        let honest = NodeIdentity::generate_named("honest");
+        let mut signal = Signal::builder(SignalType::Data)
+            .payload(b"the real claim".to_vec())
+            .build();
+        signal.attest(&honest);
+
+        let wrong = NodeIdentity::generate_named("forger");
+        let mut forged = wrong.attest("a totally different origin hash");
+        // Keep the forger's name but a signature that cannot verify here.
+        forged.node_id = "forger".to_string();
+        signal.attestations.push(forged);
+
+        let verified = signal.verified_attesters();
+        assert_eq!(
+            verified,
+            vec!["honest".to_string()],
+            "the forged entry is dropped"
+        );
+        assert!(!verified.contains(&"forger".to_string()));
     }
 
     #[test]
