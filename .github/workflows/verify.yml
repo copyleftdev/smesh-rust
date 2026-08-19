@@ -34,6 +34,27 @@ jobs:
           SMESH_DST_SEEDS: ${{ inputs.dst_seeds || '2000' }}
         run: cargo test -p smesh-core --test dst --release
 
+  model:
+    name: model checking
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Check the gossip spec
+        # Two workers and a 2GB heap, not "auto". TLC will take every core and
+        # grow until the kernel stops it, and this model is small enough that
+        # needing more would mean the model is wrong.
+        env:
+          VERIFY_JOBS: "2"
+          TLC_HEAP: "2g"
+          VERIFY_TIMEOUT: "600"
+        run: ./verify/tla.sh
+
   mutation:
     name: mutation testing
     runs-on: ubuntu-latest

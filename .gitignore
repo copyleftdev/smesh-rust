@@ -73,3 +73,8 @@ film/out/
 film/src/audio/
 film/src/frames/
 film/src/node_modules/
+
+# TLC is fetched on demand by verify/tla.sh
+verify/tla/tla2tools.jar
+verify/tla/states/
+verify/tla/*.old
