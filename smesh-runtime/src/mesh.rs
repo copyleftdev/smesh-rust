@@ -42,6 +42,13 @@ use crate::peer::{Peer, PeerManager, PeerState};
 use crate::runtime::RuntimeEvent;
 use crate::transport::{QuicTransport, TransportConfig, TransportError, TransportMessage};
 
+/// First retry delay after a peer is lost.
+const RECONNECT_BASE: Duration = Duration::from_millis(500);
+/// Longest a retry is ever deferred.
+const RECONNECT_MAX: Duration = Duration::from_secs(30);
+/// How often the supervisor wakes to consider reconnecting.
+const RECONNECT_TICK: Duration = Duration::from_millis(500);
+
 /// Configuration for joining a mesh.
 #[derive(Debug, Clone)]
 pub struct MeshConfig {
@@ -83,6 +90,49 @@ impl Default for MeshConfig {
     }
 }
 
+/// Retry schedule for one address.
+#[derive(Debug, Clone, Copy)]
+struct Backoff {
+    /// Consecutive failures so far.
+    failures: u32,
+    /// How long to wait before the next attempt.
+    wait: Duration,
+    /// Time already spent waiting since the last attempt.
+    waited: Duration,
+}
+
+impl Backoff {
+    /// Ready to try again immediately.
+    fn ready() -> Self {
+        Self {
+            failures: 0,
+            wait: Duration::ZERO,
+            waited: Duration::ZERO,
+        }
+    }
+
+    /// Back off further after a failed attempt.
+    ///
+    /// Doubling from one second and capping at thirty keeps a permanently dead
+    /// address from being hammered while still recovering a transient outage in
+    /// seconds rather than minutes.
+    fn fail(&mut self) {
+        self.failures = self.failures.saturating_add(1);
+        self.wait = RECONNECT_BASE
+            .saturating_mul(1u32 << self.failures.min(5))
+            .min(RECONNECT_MAX);
+        self.waited = Duration::ZERO;
+    }
+
+    fn due(&self) -> bool {
+        self.waited >= self.wait
+    }
+
+    fn tick(&mut self, elapsed: Duration) {
+        self.waited = self.waited.saturating_add(elapsed);
+    }
+}
+
 /// Shared state for the mesh tasks.
 struct MeshCtx {
     transport: Arc<QuicTransport>,
@@ -100,6 +150,14 @@ struct MeshCtx {
     /// An accepted connection's source address is ephemeral, so this is the
     /// only way to attribute an inbound frame to a SMESH node.
     conn_ids: Arc<RwLock<HashMap<SocketAddr, NodeId>>>,
+    /// Addresses we want to stay connected to, and the backoff state for each.
+    ///
+    /// Without this the mesh could only degrade: a peer that restarted, or a
+    /// link that blipped, was gone for the rest of the run because nothing ever
+    /// dialled it again. Only addresses we dialled are tracked — a peer that
+    /// dialled us will dial us again, and re-dialling it too would race two
+    /// connections onto the same pair.
+    reconnect: RwLock<HashMap<SocketAddr, Backoff>>,
     /// Addresses we dialled ourselves.
     ///
     /// Whoever dials sends the first `Hello`; the other side answers. Without
@@ -161,6 +219,8 @@ pub(crate) struct MeshStartup {
     pub local_node_id: NodeId,
     /// Its public key, advertised so peers can bind the name to it.
     pub local_public_key: String,
+    /// Its private key, used to build the TLS certificate.
+    pub identity_pkcs8_der: Vec<u8>,
     /// Shared field and node state.
     pub network: Arc<RwLock<Network>>,
     /// Shared peer table.
@@ -180,18 +240,22 @@ pub(crate) async fn start(
         config,
         local_node_id,
         local_public_key,
+        identity_pkcs8_der,
         network,
         peers,
         event_tx,
         journal,
         conn_ids,
     } = startup;
-    let mut transport = QuicTransport::new(TransportConfig {
-        bind_addr: config.bind_addr,
-        max_message_size: config.max_message_size,
-        keepalive_interval_ms: config.keepalive_interval_ms,
-        ..Default::default()
-    })
+    let mut transport = QuicTransport::new(
+        TransportConfig {
+            bind_addr: config.bind_addr,
+            max_message_size: config.max_message_size,
+            keepalive_interval_ms: config.keepalive_interval_ms,
+            ..Default::default()
+        },
+        identity_pkcs8_der,
+    )
     .await?;
 
     let incoming = transport.take_incoming().ok_or_else(|| {
@@ -224,6 +288,7 @@ pub(crate) async fn start(
         local_public_key,
         conn_ids,
         dialed: RwLock::new(HashSet::new()),
+        reconnect: RwLock::new(HashMap::new()),
         pinned_keys: RwLock::new(HashMap::new()),
         max_peers_shared: config.max_peers_shared,
         peer_discovery: config.peer_discovery,
@@ -257,15 +322,39 @@ pub(crate) async fn start(
         }));
     }
 
-    // Dial bootstrap peers and introduce ourselves.
-    for addr in &config.bootstrap {
-        if *addr == listen_addr {
-            continue;
-        }
-        match dial(&ctx, *addr).await {
-            Ok(()) => info!("dialled bootstrap peer {}", addr),
-            Err(e) => warn!("bootstrap peer {} unreachable: {}", addr, e),
-        }
+    // Dial bootstrap peers in the background. Doing this inline meant a single
+    // unreachable address held up startup for the whole handshake timeout, and
+    // several of them did so one after another.
+    {
+        let ctx = Arc::clone(&ctx);
+        let bootstrap: Vec<SocketAddr> = config
+            .bootstrap
+            .iter()
+            .copied()
+            .filter(|addr| *addr != listen_addr)
+            .collect();
+
+        tasks.push(tokio::spawn(async move {
+            let dials = bootstrap.iter().map(|addr| {
+                let ctx = Arc::clone(&ctx);
+                async move {
+                    match dial(&ctx, *addr).await {
+                        Ok(()) => info!("dialled bootstrap peer {}", addr),
+                        // Not fatal: the supervisor keeps trying.
+                        Err(e) => warn!("bootstrap peer {} unreachable: {}", addr, e),
+                    }
+                }
+            });
+            futures::future::join_all(dials).await;
+        }));
+    }
+
+    // Keep wanting the peers we were told about, even if they are not up yet.
+    {
+        let ctx = Arc::clone(&ctx);
+        tasks.push(tokio::spawn(async move {
+            reconnect_loop(ctx).await;
+        }));
     }
 
     Ok((
@@ -280,9 +369,30 @@ pub(crate) async fn start(
 
 /// Connect to a peer and send our `Hello`.
 async fn dial(ctx: &MeshCtx, addr: SocketAddr) -> Result<(), TransportError> {
-    ctx.transport.connect(addr).await?;
-    ctx.dialed.write().await.insert(addr);
-    ctx.transport.send(addr, hello(ctx)).await
+    // Record the intent before the attempt, so an address that fails on first
+    // contact is still retried rather than forgotten.
+    ctx.reconnect
+        .write()
+        .await
+        .entry(addr)
+        .or_insert_with(Backoff::ready);
+
+    let result = async {
+        ctx.transport.connect(addr).await?;
+        ctx.dialed.write().await.insert(addr);
+        ctx.transport.send(addr, hello(ctx)).await
+    }
+    .await;
+
+    let mut reconnect = ctx.reconnect.write().await;
+    if let Some(backoff) = reconnect.get_mut(&addr) {
+        match &result {
+            Ok(()) => *backoff = Backoff::ready(),
+            Err(_) => backoff.fail(),
+        }
+    }
+
+    result
 }
 
 fn hello(ctx: &MeshCtx) -> TransportMessage {
@@ -351,6 +461,32 @@ async fn on_hello(
         return;
     }
 
+    // Channel binding: the key a peer claims must be the key it actually
+    // completed the TLS handshake with. Without this the transport is encrypted
+    // but not authenticated, and anything in the path could relay someone
+    // else's introduction while holding the connection itself.
+    match ctx.transport.peer_public_key(src).await {
+        Some(proven) if proven == public_key => {}
+        proven => {
+            warn!(
+                "refusing {} from {}: claimed key is not the key it handshook with",
+                node_id, src
+            );
+            ctx.journal.record(
+                "identity_rejected",
+                json!({
+                    "peer": node_id,
+                    "source_addr": src.to_string(),
+                    "claimed_key": public_key,
+                    "proven_key": proven,
+                    "reason": "claimed public key does not match the TLS channel",
+                }),
+            );
+            refuse(ctx, src).await;
+            return;
+        }
+    }
+
     // Bind this name to this key, or refuse the peer if the name is already
     // spoken for by a different one.
     if !public_key.is_empty() {
@@ -370,6 +506,7 @@ async fn on_hello(
                         "reason": "name already pinned to a different public key",
                     }),
                 );
+                refuse(ctx, src).await;
                 return;
             }
             Some(_) => {}
@@ -383,7 +520,14 @@ async fn on_hello(
         let mut ids = ctx.conn_ids.write().await;
         ids.insert(src, node_id.clone()).is_none()
     };
-    let already_known = ctx.peers.get_peer(&node_id).await.is_some();
+    // A peer that dropped and came back is news again. Treating "we have seen
+    // this name before" as "already connected" silently swallowed every
+    // recovery, so the peer table healed while the event stream did not.
+    let already_connected = ctx
+        .peers
+        .get_peer(&node_id)
+        .await
+        .is_some_and(|peer| peer.is_connected());
 
     let mut peer = Peer::new(node_id.clone(), listen_addr, node_id.clone());
     peer.state = PeerState::Connected;
@@ -394,7 +538,7 @@ async fn on_hello(
         return;
     }
 
-    if !already_known {
+    if !already_connected {
         ctx.journal.record(
             "peer_connected",
             json!({
@@ -428,6 +572,19 @@ async fn on_hello(
                 .await;
         }
     }
+}
+
+/// Drop a peer we will not talk to.
+///
+/// Leaving the connection open would keep an unauthenticated peer holding
+/// resources and retrying forever, and the reconnect supervisor would keep
+/// dialling an address it is only going to refuse again. A peer with a durable
+/// identity is unaffected: its key does not change, so it is never refused.
+async fn refuse(ctx: &MeshCtx, src: SocketAddr) {
+    ctx.reconnect.write().await.remove(&src);
+    ctx.dialed.write().await.remove(&src);
+    ctx.conn_ids.write().await.remove(&src);
+    ctx.transport.disconnect(src).await;
 }
 
 /// Dial peers we were told about but have not met.
@@ -801,6 +958,64 @@ async fn forward_signal(
                 "kind": "relay",
             }),
         );
+    }
+}
+
+/// Keep dialling the peers we want until they answer.
+///
+/// A peer is "wanted" once we have dialled it, and stays wanted for the rest of
+/// the run. Reconnection is what separates a mesh that heals from one that only
+/// ever loses members.
+async fn reconnect_loop(ctx: Arc<MeshCtx>) {
+    let mut ticker = tokio::time::interval(RECONNECT_TICK);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+    loop {
+        ticker.tick().await;
+
+        let live: HashSet<SocketAddr> = ctx.transport.connected_addrs().await.into_iter().collect();
+
+        let due: Vec<SocketAddr> = {
+            let mut reconnect = ctx.reconnect.write().await;
+            let mut due = Vec::new();
+            for (addr, backoff) in reconnect.iter_mut() {
+                if live.contains(addr) {
+                    *backoff = Backoff::ready();
+                    continue;
+                }
+                backoff.tick(RECONNECT_TICK);
+                if backoff.due() {
+                    due.push(*addr);
+                }
+            }
+            due
+        };
+
+        for addr in due {
+            let attempt = ctx
+                .reconnect
+                .read()
+                .await
+                .get(&addr)
+                .map(|b| b.failures + 1)
+                .unwrap_or(1);
+
+            ctx.journal.record(
+                "reconnect_attempt",
+                json!({ "addr": addr.to_string(), "attempt": attempt }),
+            );
+
+            match dial(&ctx, addr).await {
+                Ok(()) => {
+                    info!("reconnected to {} on attempt {}", addr, attempt);
+                    ctx.journal.record(
+                        "reconnected",
+                        json!({ "addr": addr.to_string(), "attempt": attempt }),
+                    );
+                }
+                Err(e) => debug!("reconnect to {} failed: {}", addr, e),
+            }
+        }
     }
 }
 

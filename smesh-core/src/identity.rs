@@ -16,6 +16,7 @@
 //! already taken. Signatures prove key ownership, not name ownership. The mesh
 //! layer closes that by pinning a name to the key that first used it.
 
+use ed25519_dalek::pkcs8::EncodePrivateKey;
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
@@ -73,6 +74,47 @@ impl NodeIdentity {
         }
     }
 
+    /// Load an identity from disk, creating it on first run.
+    ///
+    /// Without this a node's key is new on every start, so a restarted node
+    /// looks like an impostor to every peer that pinned its old key — which
+    /// makes the mesh's own authentication the thing that prevents it
+    /// rejoining. A durable key is what turns "the name is taken" from a
+    /// permanent exclusion into a real identity.
+    ///
+    /// The file holds a private key, so it is created read/write for the owner
+    /// only and an over-permissive existing file is refused rather than used.
+    pub fn load_or_create(
+        path: impl AsRef<std::path::Path>,
+        node_id: impl Into<NodeId>,
+    ) -> std::io::Result<Self> {
+        use ed25519_dalek::pkcs8::DecodePrivateKey;
+        use std::io::{Error, ErrorKind};
+
+        let path = path.as_ref();
+        let node_id = node_id.into();
+
+        if path.exists() {
+            reject_if_world_readable(path)?;
+            let der = std::fs::read(path)?;
+            let signing_key = SigningKey::from_pkcs8_der(&der)
+                .map_err(|e| Error::new(ErrorKind::InvalidData, format!("bad identity: {e}")))?;
+            return Ok(Self {
+                signing_key,
+                node_id,
+            });
+        }
+
+        let identity = Self::generate_named(node_id);
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        write_private(path, &identity.to_pkcs8_der())?;
+        Ok(identity)
+    }
+
     /// This identity's node id.
     pub fn node_id(&self) -> &str {
         &self.node_id
@@ -81,6 +123,21 @@ impl NodeIdentity {
     /// This identity's public key, hex encoded.
     pub fn public_key_hex(&self) -> String {
         hex(self.signing_key.verifying_key().as_bytes())
+    }
+
+    /// This identity's private key as PKCS#8 DER.
+    ///
+    /// Used to build the node's TLS certificate from the same key it signs
+    /// attestations with, so the transport channel and the application identity
+    /// are the same identity rather than two unrelated ones.
+    ///
+    /// Secret material: hand it to the transport and nowhere else.
+    pub fn to_pkcs8_der(&self) -> Vec<u8> {
+        self.signing_key
+            .to_pkcs8_der()
+            .expect("an ed25519 key always encodes as pkcs8")
+            .as_bytes()
+            .to_vec()
     }
 
     /// Attest to a claim, by its content hash.
@@ -148,6 +205,52 @@ impl Attestation {
         let bytes: [u8; 64] = unhex(&self.signature)?.try_into().ok()?;
         Some(Signature::from_bytes(&bytes))
     }
+}
+
+/// Write secret material so only the owner can read it.
+#[cfg(unix)]
+fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    // create_new so an existing key is never silently overwritten.
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(bytes)
+}
+
+/// Write secret material. Permissions are left to the platform.
+#[cfg(not(unix))]
+fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    std::fs::write(path, bytes)
+}
+
+/// Refuse an identity file that anyone else on the box can read.
+#[cfg(unix)]
+fn reject_if_world_readable(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode = std::fs::metadata(path)?.permissions().mode() & 0o077;
+    if mode != 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!(
+                "{} is readable by others (mode {:o}); refusing to load a private key",
+                path.display(),
+                mode
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// No portable notion of file permissions to check here.
+#[cfg(not(unix))]
+fn reject_if_world_readable(_path: &std::path::Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 /// Node id derived from a public key.
@@ -239,6 +342,51 @@ mod tests {
         };
         assert!(!att.verify("abc123"));
         assert!(!att.is_self_certifying());
+    }
+
+    #[test]
+    fn the_pkcs8_export_carries_this_very_key() {
+        use ed25519_dalek::pkcs8::DecodePrivateKey;
+        let id = NodeIdentity::generate();
+        let decoded = SigningKey::from_pkcs8_der(&id.to_pkcs8_der()).unwrap();
+        assert_eq!(
+            decoded.verifying_key().to_bytes(),
+            id.signing_key.verifying_key().to_bytes(),
+            "the certificate must be built from the same key that signs claims"
+        );
+    }
+
+    #[test]
+    fn an_identity_survives_a_restart() {
+        let dir = std::env::temp_dir().join(format!("smesh-id-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("node.key");
+        std::fs::remove_file(&path).ok();
+
+        let first = NodeIdentity::load_or_create(&path, "latency").unwrap();
+        let again = NodeIdentity::load_or_create(&path, "latency").unwrap();
+
+        // The whole point: a peer that pinned this key still recognises us.
+        assert_eq!(first.public_key_hex(), again.public_key_hex());
+        assert_eq!(again.node_id(), "latency");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_world_readable_identity_file_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("smesh-id-perm-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("node.key");
+        std::fs::remove_file(&path).ok();
+
+        NodeIdentity::load_or_create(&path, "latency").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert!(NodeIdentity::load_or_create(&path, "latency").is_err());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

@@ -140,25 +140,26 @@ impl SmeshRuntime {
         config: MeshConfig,
         local_node_id: &str,
     ) -> Result<MeshHandle, TransportError> {
-        let local_public_key = {
+        let (local_public_key, identity_pkcs8_der) = {
             let network = self.network.read().await;
             let Some(node) = network.nodes.get(local_node_id) else {
                 return Err(TransportError::ConnectionFailed(format!(
                     "node {local_node_id} is not in this runtime's network"
                 )));
             };
-            if node.identity.is_none() {
+            let Some(identity) = node.identity.as_ref() else {
                 return Err(TransportError::ConnectionFailed(format!(
                     "node {local_node_id} holds no signing key, so it cannot attest to anything"
                 )));
-            }
-            node.public_key.clone()
+            };
+            (node.public_key.clone(), identity.to_pkcs8_der())
         };
 
         let (handle, transport) = mesh::start(mesh::MeshStartup {
             config,
             local_node_id: local_node_id.to_string() as NodeId,
             local_public_key,
+            identity_pkcs8_der,
             network: Arc::clone(&self.network),
             peers: Arc::clone(&self.peers),
             event_tx: self.event_tx.clone(),

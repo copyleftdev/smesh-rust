@@ -7,6 +7,7 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, info, warn};
@@ -107,6 +108,13 @@ impl TransportMessage {
     }
 }
 
+/// How long to wait for a handshake before giving up on a peer.
+pub const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 5_000;
+/// How often to tell a peer we are still here.
+pub const DEFAULT_KEEPALIVE_MS: u64 = 2_000;
+/// How long silence is tolerated before a peer is considered gone.
+pub const DEFAULT_IDLE_TIMEOUT_MS: u64 = 8_000;
+
 /// Configuration for the transport layer
 #[derive(Debug, Clone)]
 pub struct TransportConfig {
@@ -114,10 +122,12 @@ pub struct TransportConfig {
     pub bind_addr: SocketAddr,
     /// Maximum message size in bytes
     pub max_message_size: usize,
-    /// Connection timeout in milliseconds
+    /// How long to wait for a connection to be established.
     pub connect_timeout_ms: u64,
-    /// Keepalive interval in milliseconds
+    /// Keepalive interval in milliseconds.
     pub keepalive_interval_ms: u64,
+    /// How long a silent connection is kept before it is considered dead.
+    pub idle_timeout_ms: u64,
 }
 
 impl Default for TransportConfig {
@@ -125,8 +135,9 @@ impl Default for TransportConfig {
         Self {
             bind_addr: "0.0.0.0:0".parse().unwrap(),
             max_message_size: 1024 * 1024, // 1MB
-            connect_timeout_ms: 5000,
-            keepalive_interval_ms: 30000,
+            connect_timeout_ms: DEFAULT_CONNECT_TIMEOUT_MS,
+            keepalive_interval_ms: DEFAULT_KEEPALIVE_MS,
+            idle_timeout_ms: DEFAULT_IDLE_TIMEOUT_MS,
         }
     }
 }
@@ -145,43 +156,166 @@ fn ensure_crypto_provider() {
     });
 }
 
-/// Generate self-signed certificate for QUIC
-fn generate_self_signed_cert(
+/// Build this node's TLS certificate from its own signing key.
+///
+/// The certificate's public key *is* the node's Ed25519 identity key, which is
+/// what lets the channel be tied to the identity later: a peer that claims a
+/// public key in its `Hello` has to have terminated the TLS handshake with that
+/// same key, and only the holder of the private half can do that.
+///
+/// Previously each process generated a throwaway keypair here, so the transport
+/// identity was unrelated to the application identity and changed on restart.
+fn certificate_from_identity(
+    pkcs8_der: &[u8],
 ) -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>), TransportError> {
-    let cert = rcgen::generate_simple_self_signed(vec!["smesh".to_string()])
+    let key_pair = rcgen::KeyPair::try_from(pkcs8_der)
+        .map_err(|e| TransportError::TlsError(format!("identity key unusable for TLS: {e}")))?;
+
+    let params = rcgen::CertificateParams::new(vec!["smesh".to_string()])
+        .map_err(|e| TransportError::TlsError(e.to_string()))?;
+    let cert = params
+        .self_signed(&key_pair)
         .map_err(|e| TransportError::TlsError(e.to_string()))?;
 
-    let key = PrivatePkcs8KeyDer::from(cert.key_pair.serialize_der()).into();
-    let cert_der = CertificateDer::from(cert.cert.der().to_vec());
+    let key = PrivatePkcs8KeyDer::from(pkcs8_der.to_vec()).into();
+    Ok((vec![CertificateDer::from(cert.der().to_vec())], key))
+}
 
-    Ok((vec![cert_der], key))
+/// The Ed25519 public key inside a peer's certificate, hex encoded.
+///
+/// Returns `None` for anything that is not an Ed25519 certificate, which is
+/// treated as a failure to identify rather than as a pass.
+pub fn public_key_from_certificate(cert_der: &[u8]) -> Option<String> {
+    const ED25519_OID: &str = "1.3.101.112";
+
+    let (_, cert) = x509_parser::parse_x509_certificate(cert_der).ok()?;
+    let spki = cert.public_key();
+    if spki.algorithm.algorithm.to_id_string() != ED25519_OID {
+        return None;
+    }
+
+    let key = spki.subject_public_key.data.as_ref();
+    if key.len() != 32 {
+        return None;
+    }
+
+    Some(key.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Shared QUIC tuning for both ends of a connection.
+///
+/// `quinn::TransportConfig::default()` leaves the idle timeout at QUIC's own
+/// generous default, which meant a peer that died was still reported as
+/// connected for roughly thirty seconds while the node cheerfully broadcast
+/// into the void. Application-level pings do not help: liveness is decided by
+/// the transport, so it has to be told.
+///
+/// The keepalive interval must stay comfortably under half the idle timeout, or
+/// a connection can expire between two keepalives on a lossy link.
+fn tuned_transport_config(config: &TransportConfig) -> Arc<quinn::TransportConfig> {
+    let mut transport = quinn::TransportConfig::default();
+
+    let idle = Duration::from_millis(config.idle_timeout_ms);
+    transport.max_idle_timeout(Some(idle.try_into().unwrap_or(quinn::IdleTimeout::from(
+        quinn::VarInt::from_u32(DEFAULT_IDLE_TIMEOUT_MS as u32),
+    ))));
+    transport.keep_alive_interval(Some(Duration::from_millis(config.keepalive_interval_ms)));
+
+    Arc::new(transport)
 }
 
 /// Configure QUIC server with self-signed cert
-fn configure_server() -> Result<ServerConfig, TransportError> {
+fn configure_server(
+    config: &TransportConfig,
+    pkcs8_der: &[u8],
+) -> Result<ServerConfig, TransportError> {
     ensure_crypto_provider();
-    let (certs, key) = generate_self_signed_cert()?;
+    let (certs, key) = certificate_from_identity(pkcs8_der)?;
 
-    let mut server_config = ServerConfig::with_single_cert(certs, key)
+    // Require a client certificate. Not to validate it here — a self-signed
+    // mesh has no authority to validate against — but so that the accepting
+    // side can see who dialled it and hold them to that key.
+    let crypto = rustls::ServerConfig::builder()
+        .with_client_cert_verifier(Arc::new(RecordAnyClientCert))
+        .with_single_cert(certs, key)
         .map_err(|e| TransportError::TlsError(e.to_string()))?;
 
-    let transport_config = Arc::new(quinn::TransportConfig::default());
-    server_config.transport_config(transport_config);
+    let mut server_config = ServerConfig::with_crypto(Arc::new(
+        quinn::crypto::rustls::QuicServerConfig::try_from(crypto)
+            .map_err(|e| TransportError::TlsError(e.to_string()))?,
+    ));
+    server_config.transport_config(tuned_transport_config(config));
 
     Ok(server_config)
 }
 
 /// Configure QUIC client (skip server verification for P2P)
-fn configure_client() -> ClientConfig {
+fn configure_client(
+    config: &TransportConfig,
+    pkcs8_der: &[u8],
+) -> Result<ClientConfig, TransportError> {
     ensure_crypto_provider();
+    let (certs, key) = certificate_from_identity(pkcs8_der)?;
+
+    // The certificate chain still cannot be validated — every node signs its
+    // own — so the handshake accepts it and the *identity* check happens once
+    // the peer states which key it claims. See the mesh layer's channel binding.
     let crypto = rustls::ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
-        .with_no_client_auth();
+        .with_client_auth_cert(certs, key)
+        .map_err(|e| TransportError::TlsError(e.to_string()))?;
 
-    ClientConfig::new(Arc::new(
-        quinn::crypto::rustls::QuicClientConfig::try_from(crypto).unwrap(),
-    ))
+    let mut client_config = ClientConfig::new(Arc::new(
+        quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
+            .map_err(|e| TransportError::TlsError(e.to_string()))?,
+    ));
+    client_config.transport_config(tuned_transport_config(config));
+    Ok(client_config)
+}
+
+/// Accepts any client certificate so that it can be read afterwards.
+///
+/// Deliberately not a trust decision: it makes the peer's key *observable*, and
+/// the mesh layer decides whether that key is the one the peer claims to be.
+#[derive(Debug)]
+struct RecordAnyClientCert;
+
+impl rustls::server::danger::ClientCertVerifier for RecordAnyClientCert {
+    fn root_hint_subjects(&self) -> &[rustls::DistinguishedName] {
+        &[]
+    }
+
+    fn verify_client_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::server::danger::ClientCertVerified, rustls::Error> {
+        Ok(rustls::server::danger::ClientCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        vec![rustls::SignatureScheme::ED25519]
+    }
 }
 
 /// Skip server certificate verification (P2P nodes use self-signed certs)
@@ -243,12 +377,17 @@ pub struct QuicTransport {
     incoming_rx: Option<mpsc::Receiver<(SocketAddr, TransportMessage)>>,
     /// Shutdown flag
     shutdown: Arc<RwLock<bool>>,
+    /// This node's private key, used to build its TLS certificate.
+    identity_pkcs8_der: Vec<u8>,
 }
 
 impl QuicTransport {
     /// Create a new QUIC transport
-    pub async fn new(config: TransportConfig) -> Result<Self, TransportError> {
-        let server_config = configure_server()?;
+    pub async fn new(
+        config: TransportConfig,
+        identity_pkcs8_der: Vec<u8>,
+    ) -> Result<Self, TransportError> {
+        let server_config = configure_server(&config, &identity_pkcs8_der)?;
 
         let endpoint = Endpoint::server(server_config, config.bind_addr)?;
 
@@ -263,6 +402,7 @@ impl QuicTransport {
             incoming_tx,
             incoming_rx: Some(incoming_rx),
             shutdown: Arc::new(RwLock::new(false)),
+            identity_pkcs8_der,
         })
     }
 
@@ -286,14 +426,28 @@ impl QuicTransport {
             }
         }
 
-        let client_config = configure_client();
+        let client_config = configure_client(&self.config, &self.identity_pkcs8_der)?;
 
-        let connection = self
+        // `connect_with` retries the handshake internally and will sit there
+        // for QUIC's own timeout, so an unreachable address used to hold the
+        // caller for thirty seconds. Bound it by the configured value.
+        let connecting = self
             .endpoint
             .connect_with(client_config, addr, "smesh")
-            .map_err(|e| TransportError::ConnectionFailed(e.to_string()))?
-            .await
             .map_err(|e| TransportError::ConnectionFailed(e.to_string()))?;
+
+        let connection = tokio::time::timeout(
+            Duration::from_millis(self.config.connect_timeout_ms),
+            connecting,
+        )
+        .await
+        .map_err(|_| {
+            TransportError::ConnectionFailed(format!(
+                "handshake with {addr} timed out after {}ms",
+                self.config.connect_timeout_ms
+            ))
+        })?
+        .map_err(|e| TransportError::ConnectionFailed(e.to_string()))?;
 
         debug!("Connected to peer at {}", addr);
 
@@ -379,6 +533,27 @@ impl QuicTransport {
             .map(|addr| self.send(*addr, TransportMessage::signal(signal.clone(), now)));
 
         futures::future::join_all(sends).await
+    }
+
+    /// The Ed25519 public key the peer actually completed the handshake with.
+    ///
+    /// This is the key half of channel binding: whatever a peer *claims* to be
+    /// in its `Hello`, this is the key it demonstrably holds the private half
+    /// of. An attacker relaying someone else's introduction cannot also present
+    /// their certificate, because it cannot complete the handshake without
+    /// their private key.
+    pub async fn peer_public_key(&self, addr: SocketAddr) -> Option<String> {
+        let connection = self.connections.read().await.get(&addr).cloned()?;
+        let identity = connection.peer_identity()?;
+        let certs = identity.downcast::<Vec<CertificateDer<'static>>>().ok()?;
+        public_key_from_certificate(certs.first()?)
+    }
+
+    /// Close and forget one connection.
+    pub async fn disconnect(&self, addr: SocketAddr) {
+        if let Some(connection) = self.connections.write().await.remove(&addr) {
+            connection.close(0u32.into(), b"refused");
+        }
     }
 
     /// Addresses of every live connection, dialled or accepted.
@@ -550,65 +725,10 @@ impl QuicTransport {
     }
 }
 
-/// Simple transport for testing (no QUIC)
-pub struct Transport {
-    config: TransportConfig,
-    tx: mpsc::Sender<(SocketAddr, TransportMessage)>,
-    rx: mpsc::Receiver<(SocketAddr, TransportMessage)>,
-}
-
-impl Transport {
-    /// Create a new simple transport
-    pub fn new(config: TransportConfig) -> Self {
-        let (tx, _rx_out) = mpsc::channel(1000);
-        let (_tx_in, rx) = mpsc::channel(1000);
-
-        Self { config, tx, rx }
-    }
-
-    /// Send a message
-    pub async fn send(
-        &self,
-        addr: SocketAddr,
-        msg: TransportMessage,
-    ) -> Result<(), TransportError> {
-        self.tx
-            .send((addr, msg))
-            .await
-            .map_err(|e| TransportError::SendFailed(e.to_string()))
-    }
-
-    /// Receive a message
-    pub async fn recv(&mut self) -> Option<(SocketAddr, TransportMessage)> {
-        self.rx.recv().await
-    }
-
-    /// Broadcast a signal
-    pub async fn broadcast(
-        &self,
-        addrs: &[SocketAddr],
-        signal: Signal,
-    ) -> Vec<Result<(), TransportError>> {
-        let now = chrono::Utc::now();
-        let mut results = Vec::new();
-        for addr in addrs {
-            let result = self
-                .send(*addr, TransportMessage::signal(signal.clone(), now))
-                .await;
-            results.push(result);
-        }
-        results
-    }
-
-    /// Get local address
-    pub fn local_addr(&self) -> SocketAddr {
-        self.config.bind_addr
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use smesh_core::NodeIdentity;
 
     #[test]
     fn test_transport_config() {
@@ -638,6 +758,23 @@ mod tests {
     }
 
     #[test]
+    fn the_certificate_carries_the_nodes_own_identity_key() {
+        // Channel binding rests on this: if the certificate were built from a
+        // throwaway keypair, as it used to be, the key a peer proves on the
+        // wire would have nothing to do with the key it signs claims with.
+        let identity = NodeIdentity::generate();
+        let (certs, _key) = certificate_from_identity(&identity.to_pkcs8_der()).unwrap();
+        let from_cert = public_key_from_certificate(&certs[0]).unwrap();
+        assert_eq!(from_cert, identity.public_key_hex());
+    }
+
+    #[test]
+    fn a_non_certificate_yields_no_identity() {
+        assert!(public_key_from_certificate(b"not a certificate").is_none());
+        assert!(public_key_from_certificate(&[]).is_none());
+    }
+
+    #[test]
     fn test_hello_roundtrip() {
         let msg = TransportMessage::Hello {
             node_id: "node-a".to_string(),
@@ -664,11 +801,14 @@ mod tests {
     async fn test_oversized_frame_is_rejected_before_allocation() {
         // A peer claiming a 4 GiB body must be refused on the length prefix
         // alone, never by allocating the buffer it asked for.
-        let listener = QuicTransport::new(TransportConfig {
-            bind_addr: "127.0.0.1:0".parse().unwrap(),
-            max_message_size: 1024,
-            ..Default::default()
-        })
+        let listener = QuicTransport::new(
+            TransportConfig {
+                bind_addr: "127.0.0.1:0".parse().unwrap(),
+                max_message_size: 1024,
+                ..Default::default()
+            },
+            NodeIdentity::generate().to_pkcs8_der(),
+        )
         .await
         .unwrap();
         let addr = listener.local_addr().unwrap();
@@ -677,10 +817,13 @@ mod tests {
             listener.run_accept_loop().await;
         });
 
-        let dialer = QuicTransport::new(TransportConfig {
-            bind_addr: "127.0.0.1:0".parse().unwrap(),
-            ..Default::default()
-        })
+        let dialer = QuicTransport::new(
+            TransportConfig {
+                bind_addr: "127.0.0.1:0".parse().unwrap(),
+                ..Default::default()
+            },
+            NodeIdentity::generate().to_pkcs8_der(),
+        )
         .await
         .unwrap();
         dialer.connect(addr).await.unwrap();

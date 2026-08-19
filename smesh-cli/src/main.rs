@@ -1,6 +1,6 @@
 //! SMESH CLI - Command line tools for testing and running SMESH
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 use tracing::Level;
@@ -332,6 +332,13 @@ enum Commands {
         #[arg(long)]
         name: Option<String>,
 
+        /// File holding this node's signing key, created if absent.
+        ///
+        /// Without one the key is new on every start, and peers that pinned the
+        /// old key will refuse the restarted node as an impostor.
+        #[arg(long)]
+        identity: Option<PathBuf>,
+
         /// Payload to emit onto the mesh once connected
         #[arg(long)]
         emit: Option<String>,
@@ -446,10 +453,11 @@ async fn main() -> Result<()> {
             bind,
             peers,
             name,
+            identity,
             emit,
             emit_after,
             duration,
-        } => cmd_mesh(&bind, &peers, name, emit, emit_after, duration).await,
+        } => cmd_mesh(&bind, &peers, name, identity, emit, emit_after, duration).await,
         Commands::Orchestrate {
             out,
             base_port,
@@ -1378,6 +1386,7 @@ async fn cmd_mesh(
     bind: &str,
     peers: &[String],
     name: Option<String>,
+    identity: Option<PathBuf>,
     emit: Option<String>,
     emit_after: u64,
     duration: u64,
@@ -1398,9 +1407,21 @@ async fn cmd_mesh(
         .collect::<Result<_>>()?;
 
     // One node per process: this is the identity we present on the wire.
-    let mut node = match name {
-        Some(name) => Node::named(name),
-        None => Node::new(),
+    let mut node = match (name, identity) {
+        // A durable key is what lets this node restart and be recognised.
+        (Some(name), Some(path)) => Node::new().with_identity(
+            smesh_core::NodeIdentity::load_or_create(&path, name)
+                .with_context(|| format!("loading identity from {}", path.display()))?,
+        ),
+        (Some(name), None) => Node::named(name),
+        (None, Some(path)) => {
+            let generated = Node::new().id;
+            Node::new().with_identity(
+                smesh_core::NodeIdentity::load_or_create(&path, generated)
+                    .with_context(|| format!("loading identity from {}", path.display()))?,
+            )
+        }
+        (None, None) => Node::new(),
     };
     let node_id = node.id.clone();
 
