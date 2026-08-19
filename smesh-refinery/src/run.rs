@@ -3,7 +3,7 @@
 //! The refinery's output stops exactly where the human's authority begins —
 //! a `Changeset<Staged>` with lanes. Ratification and signing are Phase 4.
 
-use crate::extract::{run_extractors, RejectedEmission};
+use crate::extract::{run_extractors, ExpertFailure, RejectedEmission};
 use crate::packet::{ingest_all, prompt_block, NamedDoc};
 use crate::verify::{audit_grounding, sentinel_pass};
 use crate::{Oracle, RefineryError};
@@ -17,6 +17,12 @@ pub struct RunReport {
     pub docs: Vec<NamedDoc>,
     pub staged: Option<Changeset<Staged>>,
     pub rejected: Vec<RejectedEmission>,
+    /// Experts that returned nothing usable at all.
+    ///
+    /// Separate from `rejected`, which is per-emission. An empty run with three
+    /// silent failures and an empty run with three experts that genuinely found
+    /// nothing are very different results, and without this they look identical.
+    pub failures: Vec<ExpertFailure>,
     pub contradictions_caught: usize,
     pub scorecard: Option<Scorecard>,
 }
@@ -110,6 +116,20 @@ impl RunReport {
                 r.role, r.emission.subject, r.emission.kind, r.emission.object, r.reason
             ));
         }
+
+        // Surfaced rather than counted alongside rejections. An expert that
+        // returned nothing usable did not contribute a judgement at all, and a
+        // run that looks clean because half the roster failed silently is worse
+        // than one that looks bad.
+        if !self.failures.is_empty() {
+            out.push_str(&format!(
+                "experts that returned nothing usable: {}\n",
+                self.failures.len()
+            ));
+            for f in &self.failures {
+                out.push_str(&format!("  failed [{:?}] {}\n", f.role, f.reason));
+            }
+        }
         match &self.staged {
             None => out.push_str("staged changeset: EMPTY — nothing survived\n"),
             Some(staged) => {
@@ -171,6 +191,7 @@ pub async fn refine(
         docs,
         staged,
         rejected: outcome.rejected,
+        failures: outcome.failures,
         contradictions_caught,
         scorecard: None,
     })
