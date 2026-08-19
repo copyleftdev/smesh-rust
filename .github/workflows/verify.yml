@@ -87,23 +87,70 @@ jobs:
         if: always()
         run: |
           python3 - <<'PY'
-          import json, pathlib, sys
+          import json, os, pathlib, sys
+
           p = pathlib.Path("target/mutants/mutants.out/outcomes.json")
+
+          def emit(text):
+              # Both to the log and to the run summary, so the survival rate is
+              # visible on the Actions page without downloading the artifact.
+              print(text)
+              summary = os.environ.get("GITHUB_STEP_SUMMARY")
+              if summary:
+                  with open(summary, "a") as fh:
+                      fh.write(text + "\n")
+
           if not p.exists():
-              print("no outcomes produced"); sys.exit(0)
+              # A run that produced no outcomes is a failure to report, not a
+              # clean bill of health. Fail loudly rather than pass green with an
+              # empty artifact.
+              emit("## Mutation testing\n\n**No outcomes were produced** \u2014 the mutation run did not complete.")
+              sys.exit(1)
+
           d = json.loads(p.read_text())
-          missed = [o for o in d["outcomes"] if o.get("summary") == "MissedMutant"]
-          print(f"{len(d['outcomes'])} mutants, {len(missed)} survived\n")
-          for o in missed:
-              m = o["scenario"]["Mutant"]
-              print(f"  survived: {m['file']}:{m['function']['function_name']}")
-          print("\nA survivor means the tests would not notice that change.")
-          print("Known artifact: cfg(not(unix)) branches cannot run on this platform.")
+          outcomes = d["outcomes"]
+
+          def summ(o):
+              return o.get("summary", "")
+
+          caught = sum(summ(o) == "CaughtMutant" for o in outcomes)
+          missed = [o for o in outcomes if summ(o) == "MissedMutant"]
+          unviable = sum(summ(o) == "Unviable" for o in outcomes)
+          timeout = sum(summ(o) == "Timeout" for o in outcomes)
+          viable = caught + len(missed)
+          rate = (len(missed) / viable * 100) if viable else 0.0
+
+          emit("## Mutation testing\n")
+          emit(f"**{rate:.0f}% survival** \u2014 {len(missed)} survived of {viable} viable "
+               f"(caught {caught}, unviable {unviable}, timeout {timeout}).\n")
+          emit("A survivor means the tests would not notice that change.\n")
+
+          if missed:
+              emit("| file | line | function | mutation |")
+              emit("|------|-----:|----------|----------|")
+              for o in missed:
+                  # scenario is `{\"Mutant\": {...}}` for a real mutant and the
+                  # string \"Baseline\" otherwise; missed are always the former,
+                  # but read defensively so a schema change cannot crash the report.
+                  scen = o.get("scenario")
+                  m = scen.get("Mutant") if isinstance(scen, dict) else None
+                  if not m:
+                      continue
+                  fn = (m.get("function") or {}).get("function_name", "?")
+                  line = (((m.get("span") or {}).get("start") or {}).get("line", "?"))
+                  repl = (m.get("replacement") or "").replace("|", "\\|").replace("\n", " ")
+                  emit(f"| {m.get('file','?')} | {line} | {fn} | {repl} |")
+
+          emit("\nKnown artifact: cfg(not(unix)) branches cannot run on this platform.")
           PY
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: mutation-outcomes
-          path: target/mutants/mutants.out/outcomes.json
+          # The whole output directory, not just outcomes.json: missed.txt,
+          # the per-mutant diffs and logs are what a human actually reads when
+          # investigating a survivor.
+          path: target/mutants/mutants.out/
+          if-no-files-found: error
           retention-days: 14
