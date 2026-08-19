@@ -1407,7 +1407,7 @@ async fn cmd_mesh(
         .collect::<Result<_>>()?;
 
     // One node per process: this is the identity we present on the wire.
-    let mut node = match (name, identity) {
+    let node = match (name, identity) {
         // A durable key is what lets this node restart and be recognised.
         (Some(name), Some(path)) => Node::new().with_identity(
             smesh_core::NodeIdentity::load_or_create(&path, name)
