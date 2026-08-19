@@ -499,9 +499,9 @@ async fn punch_coordination_reaches_the_target() {
     // It does NOT prove NAT traversal. On loopback the resulting dial would
     // have succeeded anyway; what is under test is that the coordination path
     // runs and the two ends find each other through it.
-    let rendezvous = MeshNode::start("rendezvous", vec![]).await;
-    let left = MeshNode::start("left", vec![rendezvous.addr()]).await;
-    let right = MeshNode::start("right", vec![rendezvous.addr()]).await;
+    let rendezvous = MeshNode::start_pinned("rendezvous", vec![]).await;
+    let left = MeshNode::start_pinned("left", vec![rendezvous.addr()]).await;
+    let right = MeshNode::start_pinned("right", vec![rendezvous.addr()]).await;
 
     eventually(
         Duration::from_secs(6),
@@ -510,38 +510,26 @@ async fn punch_coordination_reaches_the_target() {
     )
     .await;
 
-    // Discovery is on by default, so wait until they are NOT yet paired before
-    // asserting the punch is what pairs them.
-    let paired = |node: &MeshNode| {
-        let peers = node.runtime.peers();
-        async move {
-            peers
-                .connected_peers()
-                .await
-                .iter()
-                .any(|p| p.node_id == "right")
-        }
-    };
-
-    if !paired(&left).await {
-        left.handle.request_punch("right").await;
-
-        eventually(
-            Duration::from_secs(8),
-            "left and right pair through the rendezvous",
-            || async {
-                left.runtime.peers().get_peer("right").await.is_some()
-                    || right.runtime.peers().get_peer("left").await.is_some()
-            },
-        )
-        .await;
-    }
-
+    // Discovery would pair these two on its own, and then this test would pass
+    // without the punch path ever running — the same way the dedup test used to
+    // pass without asserting anything. Pin the topology so the rendezvous is
+    // genuinely the only route between them.
     assert!(
-        left.runtime.peers().get_peer("right").await.is_some()
-            || right.runtime.peers().get_peer("left").await.is_some(),
-        "the two ends should have found each other"
+        left.runtime.peers().get_peer("right").await.is_none(),
+        "left and right must not already be paired, or the punch proves nothing"
     );
+
+    left.handle.request_punch("right").await;
+
+    eventually(
+        Duration::from_secs(10),
+        "left and right pair through the rendezvous",
+        || async {
+            left.runtime.peers().get_peer("right").await.is_some()
+                || right.runtime.peers().get_peer("left").await.is_some()
+        },
+    )
+    .await;
 
     rendezvous.shutdown().await;
     left.shutdown().await;

@@ -593,12 +593,6 @@ async fn on_hello(
         return;
     }
 
-    // A peer told us where it sees us. Behind NAT that is the only address
-    // anybody else can use, and we have no other way to discover it.
-    if let Some(mine) = observed_addr {
-        learn_reflexive(ctx, mine, &node_id).await;
-    }
-
     // Channel binding: the key a peer claims must be the key it actually
     // completed the TLS handshake with. Without this the transport is encrypted
     // but not authenticated, and anything in the path could relay someone
@@ -675,6 +669,15 @@ async fn on_hello(
     if !ctx.peers.add_peer(peer).await {
         debug!("peer table full, refused {}", node_id);
         return;
+    }
+
+    // Only now, once this peer has proved its key and cleared name pinning, is
+    // it allowed to tell us where we are. Accepting this earlier meant any
+    // unauthenticated `Hello` could fix our reflexive address for the rest of
+    // the run — and we advertise that address to everyone else, so a single
+    // hostile packet would have redirected the whole mesh's idea of us.
+    if let Some(mine) = observed_addr {
+        learn_reflexive(ctx, mine, &node_id).await;
     }
 
     if !already_connected {
