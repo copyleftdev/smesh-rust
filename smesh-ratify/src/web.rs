@@ -94,8 +94,18 @@ fn candidate_view(session: &Session, c: &CandidateEdge) -> CandidateView {
     }
 }
 
+/// Take the session lock, tolerating a poisoned one.
+///
+/// A panic elsewhere in a handler poisons the mutex, and propagating that
+/// turns one failed request into a server that refuses every subsequent one.
+/// The session is a plain data structure — there is no invariant a panic could
+/// have left half-applied — so recovering is safe and keeps a reviewer's
+/// in-progress work reachable.
 async fn api_state(State(app): State<App>) -> Json<serde_json::Value> {
-    let session = app.session.lock().expect("session lock");
+    let session = app
+        .session
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let candidates: Vec<CandidateView> = session
         .staged
         .candidates
@@ -174,7 +184,10 @@ async fn api_decision(
     State(app): State<App>,
     Json(body): Json<DecisionBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let mut session = app.session.lock().expect("session lock");
+    let mut session = app
+        .session
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let decision = build_decision(&session, &body)?;
     session
         .decide(body.key.clone(), decision)
@@ -185,7 +198,10 @@ async fn api_decision(
 async fn api_approve_green(
     State(app): State<App>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let mut session = app.session.lock().expect("session lock");
+    let mut session = app
+        .session
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let approved = session.approve_green_lane().map_err(ratify_status)?;
     Ok(Json(
         json!({ "approved": approved, "progress": session.progress() }),
@@ -195,7 +211,10 @@ async fn api_approve_green(
 async fn api_ratify(
     State(app): State<App>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let mut session = app.session.lock().expect("session lock");
+    let mut session = app
+        .session
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let signed = session
         .ratify_and_sign(&app.reviewer)
         .map_err(ratify_status)?;

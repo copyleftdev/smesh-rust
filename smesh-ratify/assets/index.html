@@ -213,9 +213,17 @@ button.batch:hover{background:var(--teal-ink);color:var(--paper)}
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{transition-duration:.01ms!important;animation-duration:.01ms!important}
 }
+
+/* A visible focus ring. Ratification is a keyboard-driven review, and a
+   control you cannot see yourself on is one you can approve by accident. */
+#errorbar{background:#7f1d1d;color:#fee2e2;padding:.6rem 1rem;font-size:.9rem}
+a:focus-visible, button:focus-visible, [tabindex]:focus-visible, summary:focus-visible{
+  outline:3px solid #60a5fa; outline-offset:2px; border-radius:2px;
+}
 </style>
 </head>
 <body>
+<div id="errorbar" role="alert" hidden></div>
 <!-- icon sprite: hand-drawn 20px grid, 1.5px stroke -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <defs>
@@ -296,9 +304,27 @@ const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">"
 let STATE = null;
 const open = new Set();
 
+function showError(msg){
+  const bar = document.getElementById("errorbar");
+  if(!bar) return;
+  bar.textContent = msg;
+  bar.hidden = false;
+}
+
 async function load(){
-  STATE = await (await fetch("/api/state")).json();
-  render();
+  // A failed fetch used to reject silently and leave the last render on
+  // screen, so a reviewer could go on approving against state the server had
+  // already moved past. Say so instead.
+  try {
+    const res = await fetch("/api/state");
+    if(!res.ok) throw new Error(`server returned ${res.status}`);
+    STATE = await res.json();
+    const bar = document.getElementById("errorbar");
+    if(bar) bar.hidden = true;
+    render();
+  } catch (e) {
+    showError(`Could not load the review session: ${e.message}. What you see may be out of date.`);
+  }
 }
 
 function decisionChip(d){
@@ -477,8 +503,16 @@ function wire(){
   });
   const batch = document.getElementById("batch-green");
   if(batch) batch.onclick = async () => {
+    // A failure here silently did nothing, and the reload made it look like a
+    // deliberate no-op. Bulk approval is exactly the action a reviewer must not
+    // be wrong about having taken.
     const res = await fetch("/api/approve-green", {method:"POST"});
-    if(res.ok){ const j = await res.json(); toast(`${j.approved} green candidates approved`); }
+    if(res.ok){
+      const j = await res.json();
+      toast(`${j.approved} green candidates approved`);
+    } else {
+      showError(`Bulk approval failed (${res.status}). Nothing was approved.`);
+    }
     await load();
   };
   const signBtn = document.getElementById("sign-btn");

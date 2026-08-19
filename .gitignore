@@ -81,3 +81,8 @@ verify/tla/*.old
 
 # Refinery run artifacts
 refinery-staged.json*
+
+# Reviewer signing keys and ratification sessions
+.ratify/
+demo-session.*
+*.reviewer.key

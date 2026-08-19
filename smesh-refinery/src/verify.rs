@@ -32,15 +32,7 @@ struct AuditorResponse {
 }
 
 fn context_window(text: &str, start: usize, end: usize) -> &str {
-    let mut lo = start.saturating_sub(200);
-    while lo > 0 && !text.is_char_boundary(lo) {
-        lo -= 1;
-    }
-    let mut hi = (end + 200).min(text.len());
-    while hi < text.len() && !text.is_char_boundary(hi) {
-        hi += 1;
-    }
-    &text[lo..hi]
+    smesh_world::context_window(text, start, end, 200)
 }
 
 /// Run the Grounding Auditor over every corpus-derived candidate.
@@ -120,6 +112,12 @@ pub async fn sentinel_pass(
 
     let mut refutations: BTreeMap<usize, String> = BTreeMap::new();
     let mut conflicts = 0usize;
+    // Contradictions are counted per pair. A candidate that conflicts with
+    // several others added one per conflict, so a single disputed claim
+    // inflated the total and the detection rate computed from it.
+    let mut counted_pairs: std::collections::HashSet<(usize, usize)> =
+        std::collections::HashSet::new();
+    let mut count_pair = move |i: usize, j: usize| counted_pairs.insert((i.min(j), i.max(j)));
 
     let mut groups: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
     for (i, c) in candidates.iter().enumerate() {
@@ -149,7 +147,9 @@ pub async fn sentinel_pass(
                         .entry(j)
                         .or_insert_with(|| format!("superseded by {winner}"));
                 } else {
-                    conflicts += 1;
+                    if count_pair(i, j) {
+                        conflicts += 1;
+                    }
                     refutations
                         .entry(i)
                         .or_insert_with(|| format!("conflicts with {oj:?} for the same subject"));
@@ -200,7 +200,9 @@ pub async fn sentinel_pass(
             if related(&candidates[i].object, &candidates[j].object) {
                 continue;
             }
-            conflicts += 1;
+            if count_pair(i, j) {
+                conflicts += 1;
+            }
             let (oi, oj) = (candidates[i].object.clone(), candidates[j].object.clone());
             refutations
                 .entry(i)

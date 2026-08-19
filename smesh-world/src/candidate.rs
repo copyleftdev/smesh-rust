@@ -115,8 +115,26 @@ impl CandidateEdge {
     }
 
     /// Stable identity used by ratification records and dedup.
+    ///
+    /// Length-prefixed rather than delimited. A bare separator means a subject
+    /// containing it can impersonate another candidate — `("a|b", X, "c")` and
+    /// `("a", X, "b|c")` produced the same key. That key decides which
+    /// ratification decision applies to which edge, so a collision is two
+    /// different claims sharing one human approval.
     pub fn key(&self) -> String {
-        format!("{}|{:?}|{}", self.subject, self.kind, self.object)
+        Self::key_parts(&self.subject, self.kind, &self.object)
+    }
+
+    /// The key computation, over its parts.
+    pub fn key_parts(subject: &str, kind: EdgeKind, object: &str) -> String {
+        format!(
+            "{}:{}|{:?}|{}:{}",
+            subject.len(),
+            subject,
+            kind,
+            object.len(),
+            object
+        )
     }
 
     pub fn record(&mut self, verdict: Verdict) {
@@ -156,6 +174,15 @@ impl CandidateEdge {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn keys_cannot_collide_across_a_separator() {
+        // The key decides which ratification decision applies to which edge, so
+        // two different claims sharing one is two claims sharing one approval.
+        let a = CandidateEdge::key_parts("a|b", EdgeKind::ReportsTo, "c");
+        let b = CandidateEdge::key_parts("a", EdgeKind::ReportsTo, "b|c");
+        assert_ne!(a, b);
+    }
+
     use super::*;
     use crate::cdm::{DocMetadata, SourceFormat};
 

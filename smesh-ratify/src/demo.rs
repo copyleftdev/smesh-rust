@@ -51,8 +51,6 @@ impl Bench {
             .unwrap_or_else(|| panic!("{quote:?} not in {doc_name}"));
         let span = CdmSpan::new(start, start + quote.len());
         let citation = Citation::grounded(doc, span).expect("demo quotes ground");
-        let lo = start.saturating_sub(120);
-        let hi = (span.end + 120).min(doc.canonical_text.len());
         let view = EvidenceView {
             doc_name: doc_name.to_owned(),
             quote: quote.to_owned(),
@@ -60,7 +58,8 @@ impl Bench {
                 .native_anchor(span)
                 .map(ToString::to_string)
                 .unwrap_or_default(),
-            context: doc.canonical_text[lo..hi].to_owned(),
+            context: smesh_world::context_window(&doc.canonical_text, span.start, span.end, 120)
+                .to_owned(),
         };
         let edge = CandidateEdge::emit(role, subject.into(), kind, object.into(), vec![citation])
             .expect("demo emissions are valid");
