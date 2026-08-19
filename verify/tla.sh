@@ -33,7 +33,7 @@ echo "TLC: ${VERIFY_JOBS} workers, ${TLC_HEAP} heap"
 echo
 
 run_tlc() {
-  budgeted java -XX:+UseParallelGC -Xmx"$TLC_HEAP" -cp "$JAR" tlc2.TLC \
+  budgeted_jvm java -XX:+UseParallelGC -Xmx"$TLC_HEAP" -cp "$JAR" tlc2.TLC \
     -workers "$VERIFY_JOBS" -nowarning -config "$1" Gossip.tla 2>&1
 }
 
@@ -42,8 +42,12 @@ if out=$(run_tlc Gossip.cfg) && grep -q "Model checking completed. No error has 
   grep -E "^[0-9]+ states|^The depth" <<<"$out" | sed 's/^/  /'
   echo "  PASS: converges on every schedule"
 else
-  grep -E "^Error|^State [0-9]+|/\\\\ known" <<<"$out" | head -20 | sed 's/^/  /'
   echo "  FAIL: the fix does not hold" >&2
+  # Print everything rather than a filtered view. A grep that matches nothing
+  # returns non-zero, and under `set -o pipefail` that used to abort the script
+  # before it said anything at all -- so the one run that failed was the one
+  # run with no explanation.
+  sed 's/^/  | /' <<<"$out" | tail -30 >&2
   exit 1
 fi
 
