@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use smesh_core::{Network, Node, NodeId, Signal, SignalType};
-use smesh_runtime::{MeshConfig, MeshHandle, RuntimeConfig, SmeshRuntime};
+use smesh_runtime::{MeshConfig, MeshHandle, RuntimeConfig, SmeshRuntime, TransportMessage};
 
 const LOCALHOST: &str = "127.0.0.1:0";
 
@@ -23,8 +23,7 @@ struct MeshNode {
 
 impl MeshNode {
     async fn start(name: &str, bootstrap: Vec<SocketAddr>) -> Self {
-        let mut node = Node::new();
-        node.id = name.to_string();
+        let mut node = Node::named(name);
         // Trust the peers we will actually talk to, so the probabilistic relay
         // policy does not make these tests flaky.
         node.trust_scores.insert("node-a".to_string(), 0.99);
@@ -85,6 +84,22 @@ impl MeshNode {
         let signal = Signal::builder(SignalType::Coordination)
             .payload(payload.as_bytes().to_vec())
             .origin(&self.node_id)
+            .intensity(1.0)
+            .ttl(120.0)
+            .radius(4)
+            .build();
+
+        self.runtime
+            .emit(signal, &self.node_id)
+            .await
+            .expect("emitted")
+    }
+
+    /// Emit a claim addressed by content, so independent emitters converge.
+    async fn emit_claim(&self, payload: &str) -> String {
+        let signal = Signal::builder(SignalType::Alert)
+            .correlatable()
+            .payload(payload.as_bytes().to_vec())
             .intensity(1.0)
             .ttl(120.0)
             .radius(4)
@@ -224,4 +239,150 @@ async fn flooding_does_not_duplicate_state() {
     a.shutdown().await;
     b.shutdown().await;
     c.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_unsigned_claim_is_refused() {
+    // Before attestations existed, `origin_node_id` was a bare string and this
+    // signal would have been accepted and counted. It carries no proof that
+    // anyone stands behind it, so it must now go nowhere.
+    let a = MeshNode::start("node-a", vec![]).await;
+    let b = MeshNode::start("node-b", vec![a.addr()]).await;
+
+    eventually(Duration::from_secs(5), "a and b meet", || async {
+        b.runtime.peers().connected_count().await == 1
+    })
+    .await;
+
+    let mut signal = Signal::builder(SignalType::Coordination)
+        .payload(b"unsigned claim".to_vec())
+        .intensity(1.0)
+        .ttl(60.0)
+        .radius(4)
+        .build();
+    signal.origin_node_id = "node-a".to_string();
+    let hash = signal.origin_hash.clone();
+    assert!(signal.attestations.is_empty());
+
+    let transport = a.handle.transport();
+    let msg = TransportMessage::signal(signal, chrono::Utc::now());
+    transport.broadcast_all(&msg, None).await;
+
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert!(
+        !b.has_signal(&hash).await,
+        "a claim nobody signed must not enter the field"
+    );
+
+    a.shutdown().await;
+    b.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_tampered_attestation_is_not_counted() {
+    // An attacker replays a real signature against a claim it was not made for.
+    // The signature is genuine; the binding is not.
+    let a = MeshNode::start("node-a", vec![]).await;
+    let b = MeshNode::start("node-b", vec![a.addr()]).await;
+
+    eventually(Duration::from_secs(5), "a and b meet", || async {
+        b.runtime.peers().connected_count().await == 1
+    })
+    .await;
+
+    // A properly signed claim, so we have a valid attestation to steal.
+    let real_hash = a.emit("genuine claim").await;
+    eventually(
+        Duration::from_secs(5),
+        "b accepts the genuine claim",
+        || async { b.has_signal(&real_hash).await },
+    )
+    .await;
+
+    let stolen = {
+        let network = a.runtime.network();
+        let network = network.read().await;
+        network.field.signals[&real_hash].attestations[0].clone()
+    };
+
+    // Bolt it onto a different claim.
+    let mut forged = Signal::builder(SignalType::Coordination)
+        .payload(b"claim the attacker wants believed".to_vec())
+        .intensity(1.0)
+        .ttl(60.0)
+        .radius(4)
+        .build();
+    forged.origin_node_id = "node-a".to_string();
+    forged.attestations = vec![stolen];
+    let forged_hash = forged.origin_hash.clone();
+
+    assert!(
+        forged.verified_attesters().is_empty(),
+        "a signature must not verify against a claim it was not made for"
+    );
+
+    let msg = TransportMessage::signal(forged, chrono::Utc::now());
+    a.handle.transport().broadcast_all(&msg, None).await;
+
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert!(
+        !b.has_signal(&forged_hash).await,
+        "a claim with only a replayed signature must be refused"
+    );
+
+    a.shutdown().await;
+    b.shutdown().await;
+}
+
+#[tokio::test]
+async fn corroboration_across_the_mesh_is_signature_backed() {
+    // Two nodes independently reach the same conclusion. Content addressing
+    // puts them on one signal, and each contributes a signature, so the count
+    // of attesters is a count of verifiable statements rather than of names.
+    let a = MeshNode::start("node-a", vec![]).await;
+    let b = MeshNode::start("node-b", vec![a.addr()]).await;
+
+    eventually(Duration::from_secs(5), "a and b meet", || async {
+        a.runtime.peers().connected_count().await == 1
+            && b.runtime.peers().connected_count().await == 1
+    })
+    .await;
+
+    let hash_a = a.emit_claim("checkout-api degraded").await;
+    let hash_b = b.emit_claim("checkout-api degraded").await;
+    assert_eq!(hash_a, hash_b, "same claim must land on the same address");
+
+    eventually(
+        Duration::from_secs(6),
+        "both sides see two signed attesters",
+        || async {
+            let seen = |node: &MeshNode| {
+                let hash = hash_a.clone();
+                let network = node.runtime.network();
+                async move {
+                    let network = network.read().await;
+                    network
+                        .field
+                        .signals
+                        .get(&hash)
+                        .map(|s| s.verified_attesters().len())
+                        .unwrap_or(0)
+                }
+            };
+            seen(&a).await == 2 && seen(&b).await == 2
+        },
+    )
+    .await;
+
+    let network = a.runtime.network();
+    let network = network.read().await;
+    let signal = &network.field.signals[&hash_a];
+    let mut attesters = signal.verified_attesters();
+    attesters.sort();
+    assert_eq!(attesters, vec!["node-a".to_string(), "node-b".to_string()]);
+    assert_eq!(signal.attestations.len(), 2);
+    drop(network);
+
+    a.shutdown().await;
+    b.shutdown().await;
 }

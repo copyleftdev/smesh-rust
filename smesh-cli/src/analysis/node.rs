@@ -91,8 +91,7 @@ pub async fn run(config: AnalystConfig) -> Result<()> {
 
     // One node per process. It trusts its fellow analysts but has no idea what
     // any of them can see.
-    let mut node = Node::new();
-    node.id = node_id.clone();
+    let mut node = Node::named(&node_id);
     for other in Concern::all() {
         if other != concern {
             node.trust_scores
@@ -312,13 +311,12 @@ async fn assert_finding(
     // The payload is the assertion and nothing else, so two analysts that reach
     // the same conclusion produce identical bytes.
     //
-    // `.origin()` is deliberately NOT set. The builder folds the origin node
-    // into the content hash when it is, which would give every analyst a
-    // different hash for the same claim and make corroboration impossible. The
-    // origin is still stamped on the signal at emit time for attribution — it
-    // just stays out of the address. The address is the *claim*, not the
-    // claimant.
+    // `.correlatable()` is what makes independent analysts converge: it keeps
+    // the origin out of the content hash, so the same conclusion reached from
+    // different evidence lands on the same signal. The origin is still stamped
+    // at emit time for attribution.
     let signal = Signal::builder(SignalType::Alert)
+        .correlatable()
         .payload(finding.assertion.canonical_bytes())
         .intensity(1.0)
         .confidence(finding.confidence)

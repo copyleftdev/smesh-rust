@@ -200,13 +200,41 @@ FAIL  latency: first event is peer_connected, not node_started
 
 A peer completed the handshake in the gap between binding the endpoint and writing the node's identity line. The fix was to move the identity write inside the mesh startup, before any loop spawns. I would never have found that by looking at the picture — the picture would just have been subtly wrong.
 
+## The hole this left open
+
+Writing the above, I had to be honest that the headline claim was not yet true.
+
+"Five independent agents corroborate this" was measured by counting **strings**. `origin_node_id` was a bare name on the wire, and the reinforcement list was just more names. Any single node could append four of them and manufacture unanimous agreement for a claim nobody else had ever seen. The protocol's central measurement was forgeable by one participant.
+
+So attestations are now signatures. Each is an Ed25519 signature over the claim's content hash, bound to the attester's own name:
+
+```rust
+fn attestation_message(claim_hash: &str, node_id: &str) -> Vec<u8> {
+    let mut message = Vec::new();
+    message.extend_from_slice(claim_hash.as_bytes());
+    message.push(0x1f);  // separator, so (a,bc) and (ab,c) cannot collide
+    message.extend_from_slice(node_id.as_bytes());
+    message
+}
+```
+
+Binding the name into the signed bytes is what stops an attestation being replayed under a different name. Counting attesters is now counting signatures, and unverifiable ones are dropped rather than counted.
+
+Signatures prove key ownership, not *name* ownership — nothing there stops a peer calling itself `latency`. The mesh closes that separately by pinning a name to the key that first presented it, and refusing later keys for that name. Trust on first use: no help if the impostor arrives first, but the name is unstealable for the rest of the run.
+
+Three tests carry the property, and they are the ones I would read first:
+
+- a claim nobody signed never enters the field
+- a real signature lifted onto a different claim does not verify
+- two nodes independently reaching the same conclusion produce two signatures on one signal
+
+The content hash went from 64 bits to 128 in the same change. 64 was fine against accident, but signatures are now taken *over* that hash, so a collision would let agreement on one claim be presented as agreement on another.
+
 ## What is still wrong
 
-Being honest about the edges, because "it works" is a claim that needs a boundary:
-
-- **`origin_node_id` is unauthenticated.** It's a string on the wire, and the trust model gates relay probability on it. Spoofing another agent's identity is currently free. Ed25519-signing the origin hash closes it and is the next real piece of work.
-- **The content hash is truncated to 64 bits.** Fine against accident, not against an adversary looking for collisions.
 - **The telemetry in the demo is synthetic.** Deliberately: a seeded fixture means the run reproduces byte-for-byte on any machine, which is what makes a visualisation worth trusting. The coordination is not synthetic — real processes, real sockets, probabilistic relay.
+- **Trust on first use is not identity.** There is no key distribution and no revocation. A node that generates its own name rather than deriving it from its key is only as trustworthy as whoever it met first.
+- **The recording predates the signing work.** The run in the video was captured before attestations were signatures, so what you are watching is the mechanism, not the hardened version of it.
 
 ## See it move
 

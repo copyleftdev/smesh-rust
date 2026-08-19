@@ -36,6 +36,7 @@
 
 pub mod error;
 pub mod field;
+pub mod identity;
 pub mod network;
 pub mod node;
 pub mod payload;
@@ -45,6 +46,7 @@ pub mod trust;
 
 pub use error::{Result, SmeshError};
 pub use field::Field;
+pub use identity::{derive_node_id, Attestation, NodeIdentity};
 pub use network::{Hypha, Network, NetworkTopology};
 pub use node::{MaliciousBehavior, Node, NodeConfig, NodeId, RelayDecision};
 pub use payload::{

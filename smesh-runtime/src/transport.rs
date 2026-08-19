@@ -54,6 +54,13 @@ pub enum TransportMessage {
     Hello {
         /// Sender's SMESH node id
         node_id: String,
+        /// Sender's Ed25519 public key, hex encoded.
+        ///
+        /// Lets the receiver bind this name to this key for the rest of the
+        /// run, so a later peer cannot present the same name under a different
+        /// key and have its attestations counted.
+        #[serde(default)]
+        public_key: String,
         /// Address the sender accepts connections on
         listen_addr: SocketAddr,
     },
@@ -634,6 +641,7 @@ mod tests {
     fn test_hello_roundtrip() {
         let msg = TransportMessage::Hello {
             node_id: "node-a".to_string(),
+            public_key: "aa".repeat(32),
             listen_addr: "127.0.0.1:9001".parse().unwrap(),
         };
 
@@ -641,9 +649,11 @@ mod tests {
         match bincode::deserialize::<TransportMessage>(&bytes).unwrap() {
             TransportMessage::Hello {
                 node_id,
+                public_key,
                 listen_addr,
             } => {
                 assert_eq!(node_id, "node-a");
+                assert_eq!(public_key, "aa".repeat(32));
                 assert_eq!(listen_addr.port(), 9001);
             }
             _ => panic!("Wrong message type"),

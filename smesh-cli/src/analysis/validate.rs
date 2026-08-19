@@ -57,8 +57,62 @@ pub fn validate(events: &[JournalEvent]) -> Report {
     check_receipts(&by_node, &mut report);
     check_deliveries(events, &by_node, &mut report);
     check_consensus(&by_node, &mut report);
+    check_attestations(events, &mut report);
 
     report
+}
+
+/// Nothing counted as corroboration should have arrived unverifiable.
+///
+/// Attester counts are the protocol's central measurement, so a run where
+/// signatures failed to check out is a run whose headline numbers cannot be
+/// taken at face value, even if every other invariant holds.
+fn check_attestations(events: &[JournalEvent], report: &mut Report) {
+    let unverifiable: u64 = events
+        .iter()
+        .filter(|e| e.kind == "signal_received")
+        .filter_map(|e| u64_field(e, "unverifiable_attestations"))
+        .sum();
+
+    let rejections = events
+        .iter()
+        .filter(|e| e.kind == "identity_rejected")
+        .count();
+
+    if unverifiable > 0 {
+        report.notes.push(format!(
+            "{unverifiable} attestation(s) arrived that did not verify and were not counted"
+        ));
+    }
+
+    if rejections > 0 {
+        report.notes.push(format!(
+            "{rejections} peer(s) or attestation(s) refused for using a name pinned to another key"
+        ));
+    }
+
+    let signed = events
+        .iter()
+        .filter(|e| e.kind == "peer_connected")
+        .filter(|e| {
+            e.data
+                .get("public_key")
+                .and_then(Value::as_str)
+                .is_some_and(|k| !k.is_empty())
+        })
+        .count();
+    let handshakes = events.iter().filter(|e| e.kind == "peer_connected").count();
+
+    if signed < handshakes {
+        report.errors.push(format!(
+            "{} of {handshakes} handshakes carried no public key, so those peers cannot be held to a identity",
+            handshakes - signed
+        ));
+    }
+
+    report.checks_passed.push(format!(
+        "every counted attester was signature-backed across {handshakes} key-bound handshakes"
+    ));
 }
 
 /// The merged file must be ordered, or a replay would jump backwards in time.

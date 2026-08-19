@@ -34,7 +34,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
 use serde_json::json;
-use smesh_core::{Network, Node, NodeId, Signal};
+use smesh_core::{Attestation, Network, NodeId, Signal};
 
 use crate::journal::Journal;
 
@@ -93,6 +93,8 @@ struct MeshCtx {
     local_node_id: NodeId,
     /// Our dialable address, advertised in `Hello`.
     listen_addr: SocketAddr,
+    /// Our own public key, advertised in `Hello`.
+    local_public_key: String,
     /// Socket address -> node id, learned from `Hello`.
     ///
     /// An accepted connection's source address is ephemeral, so this is the
@@ -104,6 +106,14 @@ struct MeshCtx {
     /// recording that we initiated, the answer looks like a fresh introduction
     /// and we answer the answer, registering the peer twice.
     dialed: RwLock<HashSet<SocketAddr>>,
+    /// Node name -> the public key that first presented it.
+    ///
+    /// Signatures prove key ownership, not name ownership, so on their own they
+    /// do not stop a peer calling itself `latency`. Pinning the name to the key
+    /// seen first, and refusing later keys for that name, closes it. This is
+    /// trust-on-first-use: it cannot help if the impostor arrives first, but it
+    /// makes a name unstealable for the rest of the run.
+    pinned_keys: RwLock<HashMap<NodeId, String>>,
     max_peers_shared: usize,
     peer_discovery: bool,
     journal: Arc<Journal>,
@@ -143,15 +153,39 @@ impl MeshHandle {
 }
 
 /// Bring up the transport, join the mesh, and start the gossip tasks.
+/// Everything the mesh needs from the runtime that owns it.
+pub(crate) struct MeshStartup {
+    /// How to join.
+    pub config: MeshConfig,
+    /// The node this process presents on the wire.
+    pub local_node_id: NodeId,
+    /// Its public key, advertised so peers can bind the name to it.
+    pub local_public_key: String,
+    /// Shared field and node state.
+    pub network: Arc<RwLock<Network>>,
+    /// Shared peer table.
+    pub peers: Arc<PeerManager>,
+    /// Where runtime events go.
+    pub event_tx: mpsc::Sender<RuntimeEvent>,
+    /// Where the run is recorded.
+    pub journal: Arc<Journal>,
+    /// Shared connection address to node id map.
+    pub conn_ids: Arc<RwLock<HashMap<SocketAddr, NodeId>>>,
+}
+
 pub(crate) async fn start(
-    config: MeshConfig,
-    local_node_id: NodeId,
-    network: Arc<RwLock<Network>>,
-    peers: Arc<PeerManager>,
-    event_tx: mpsc::Sender<RuntimeEvent>,
-    journal: Arc<Journal>,
-    conn_ids: Arc<RwLock<HashMap<SocketAddr, NodeId>>>,
+    startup: MeshStartup,
 ) -> Result<(MeshHandle, Arc<QuicTransport>), TransportError> {
+    let MeshStartup {
+        config,
+        local_node_id,
+        local_public_key,
+        network,
+        peers,
+        event_tx,
+        journal,
+        conn_ids,
+    } = startup;
     let mut transport = QuicTransport::new(TransportConfig {
         bind_addr: config.bind_addr,
         max_message_size: config.max_message_size,
@@ -187,8 +221,10 @@ pub(crate) async fn start(
         event_tx,
         local_node_id,
         listen_addr,
+        local_public_key,
         conn_ids,
         dialed: RwLock::new(HashSet::new()),
+        pinned_keys: RwLock::new(HashMap::new()),
         max_peers_shared: config.max_peers_shared,
         peer_discovery: config.peer_discovery,
         journal,
@@ -252,6 +288,7 @@ async fn dial(ctx: &MeshCtx, addr: SocketAddr) -> Result<(), TransportError> {
 fn hello(ctx: &MeshCtx) -> TransportMessage {
     TransportMessage::Hello {
         node_id: ctx.local_node_id.clone(),
+        public_key: ctx.local_public_key.clone(),
         listen_addr: ctx.listen_addr,
     }
 }
@@ -265,8 +302,9 @@ async fn inbound_loop(
         match msg {
             TransportMessage::Hello {
                 node_id,
+                public_key,
                 listen_addr,
-            } => on_hello(&ctx, src, node_id, listen_addr).await,
+            } => on_hello(&ctx, src, node_id, public_key, listen_addr).await,
 
             TransportMessage::Signal { signal, age_secs } => {
                 on_signal(&ctx, src, signal, age_secs).await
@@ -302,9 +340,43 @@ async fn inbound_loop(
 }
 
 /// Register a peer that introduced itself, and answer in kind.
-async fn on_hello(ctx: &MeshCtx, src: SocketAddr, node_id: NodeId, listen_addr: SocketAddr) {
+async fn on_hello(
+    ctx: &MeshCtx,
+    src: SocketAddr,
+    node_id: NodeId,
+    public_key: String,
+    listen_addr: SocketAddr,
+) {
     if node_id == ctx.local_node_id {
         return;
+    }
+
+    // Bind this name to this key, or refuse the peer if the name is already
+    // spoken for by a different one.
+    if !public_key.is_empty() {
+        let mut pinned = ctx.pinned_keys.write().await;
+        match pinned.get(&node_id) {
+            Some(known) if known != &public_key => {
+                drop(pinned);
+                warn!(
+                    "refusing {} from {}: name already pinned to a different key",
+                    node_id, src
+                );
+                ctx.journal.record(
+                    "identity_rejected",
+                    json!({
+                        "peer": node_id,
+                        "source_addr": src.to_string(),
+                        "reason": "name already pinned to a different public key",
+                    }),
+                );
+                return;
+            }
+            Some(_) => {}
+            None => {
+                pinned.insert(node_id.clone(), public_key.clone());
+            }
+        }
     }
 
     let first_contact = {
@@ -327,6 +399,7 @@ async fn on_hello(ctx: &MeshCtx, src: SocketAddr, node_id: NodeId, listen_addr: 
             "peer_connected",
             json!({
                 "peer": node_id,
+                "public_key": public_key,
                 "peer_listen_addr": listen_addr.to_string(),
                 "source_addr": src.to_string(),
                 "we_dialled": ctx.dialed.read().await.contains(&src),
@@ -414,6 +487,26 @@ enum Outcome {
     Dropped { hash: String, reason: String },
 }
 
+/// Reject a signal whose attestations use a name pinned to another key.
+///
+/// A valid signature proves you hold *a* key, not that you are entitled to the
+/// name you signed under. Returns the offending names, or `None` if all is
+/// well.
+async fn reject_unpinned(ctx: &MeshCtx, attestations: &[Attestation]) -> Option<Vec<NodeId>> {
+    let pinned = ctx.pinned_keys.read().await;
+    let offenders: Vec<NodeId> = attestations
+        .iter()
+        .filter(|a| {
+            pinned
+                .get(&a.node_id)
+                .is_some_and(|known| known != &a.public_key)
+        })
+        .map(|a| a.node_id.clone())
+        .collect();
+
+    (!offenders.is_empty()).then_some(offenders)
+}
+
 /// Apply the local node's own policy to a signal that arrived over the wire.
 async fn on_signal(ctx: &MeshCtx, src: SocketAddr, mut signal: Signal, age_secs: f64) {
     let relayed_by = ctx
@@ -425,7 +518,25 @@ async fn on_signal(ctx: &MeshCtx, src: SocketAddr, mut signal: Signal, age_secs:
         .unwrap_or_else(|| src.to_string());
 
     let hash = signal.origin_hash.clone();
-    let incoming_attesters = Node::attesters(&signal);
+
+    // Count signatures, not names. `reinforced_by` arriving off a socket is
+    // just a list the sender wrote; only attestations carry proof.
+    let incoming_attestations = signal.attestations.clone();
+    let incoming_attesters = signal.verified_attesters();
+    let unverifiable = signal.attestations.len() - incoming_attesters.len();
+
+    if let Some(rejected) = reject_unpinned(ctx, &incoming_attestations).await {
+        ctx.journal.record(
+            "identity_rejected",
+            json!({
+                "hash": hash,
+                "relayed_by": relayed_by,
+                "attesters": rejected,
+                "reason": "attestation used a name pinned to a different public key",
+            }),
+        );
+        return;
+    }
 
     ctx.journal.record(
         "signal_received",
@@ -438,6 +549,7 @@ async fn on_signal(ctx: &MeshCtx, src: SocketAddr, mut signal: Signal, age_secs:
             "intensity": signal.current_intensity,
             "confidence": signal.confidence,
             "attesters": incoming_attesters,
+            "unverifiable_attestations": unverifiable,
         }),
     );
 
@@ -454,18 +566,12 @@ async fn on_signal(ctx: &MeshCtx, src: SocketAddr, mut signal: Signal, age_secs:
             // Merge the two attester sets. Anything the sender knew that we did
             // not is new information, and new information is worth passing on.
             let existing = network.field.signals.get_mut(&hash).expect("checked above");
-            let before = Node::attesters(existing);
-            for attester in &incoming_attesters {
-                if !before.contains(attester) {
-                    existing.reinforce(attester);
-                }
+            let new_attesters = existing.merge_attestations(&incoming_attestations);
+            // Keep the local view in step with what actually verified.
+            for attester in &new_attesters {
+                existing.reinforce(attester);
             }
-            let attesters = Node::attesters(existing);
-            let new_attesters: Vec<String> = attesters
-                .iter()
-                .filter(|a| !before.contains(a))
-                .cloned()
-                .collect();
+            let attesters = existing.verified_attesters();
 
             if new_attesters.is_empty() {
                 Outcome::Dropped {
@@ -495,6 +601,14 @@ async fn on_signal(ctx: &MeshCtx, src: SocketAddr, mut signal: Signal, age_secs:
                     forward,
                 }
             }
+        } else if incoming_attesters.is_empty() {
+            // Nobody provably stands behind this. Before signatures existed the
+            // origin was a bare string, so this is the case that used to let
+            // anyone speak as anyone.
+            Outcome::Dropped {
+                hash,
+                reason: "no verifiable attestation".to_string(),
+            }
         } else if signal.is_expired(now) {
             Outcome::Dropped {
                 hash,
@@ -520,9 +634,12 @@ async fn on_signal(ctx: &MeshCtx, src: SocketAddr, mut signal: Signal, age_secs:
                 // Whatever the sender knew about its own graph is meaningless
                 // here, so replace it outright.
                 signal.reached_nodes = vec![ctx.local_node_id.clone()];
+                // Drop the sender's unsigned name list; only signatures survive
+                // the trip, and they are already on the signal.
+                signal.reinforced_by = incoming_attesters.clone();
 
                 let hops = signal.hops;
-                let attesters = Node::attesters(&signal);
+                let attesters = incoming_attesters.clone();
                 let forward = relay_forward(ctx, &network, &signal, &hash);
 
                 network.field.signals.insert(hash.clone(), signal);

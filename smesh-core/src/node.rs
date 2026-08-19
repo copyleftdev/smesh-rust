@@ -4,10 +4,12 @@
 
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use uuid::Uuid;
 
+use std::sync::Arc;
+
+use crate::identity::NodeIdentity;
 use crate::{Signal, DEFAULT_TRUST, MAX_TRUST, MIN_TRUST};
 
 /// Unique identifier for a node
@@ -46,8 +48,16 @@ pub struct Node {
     /// Unique identifier
     pub id: NodeId,
 
-    /// Public key for identity verification
+    /// Public key for identity verification, hex encoded.
     pub public_key: String,
+
+    /// The private half, present only for a node this process actually is.
+    ///
+    /// Skipped by serde in both directions: a secret key must never reach a
+    /// journal, a snapshot or the wire. A node decoded from any of those is a
+    /// *view* of a peer and cannot sign, which is exactly right.
+    #[serde(skip)]
+    pub identity: Option<Arc<NodeIdentity>>,
 
     /// Relative compute capacity
     pub compute_capacity: f64,
@@ -128,16 +138,15 @@ impl Node {
     pub fn with_config(config: NodeConfig) -> Self {
         let id = Uuid::new_v4().to_string()[..8].to_string();
 
-        // Generate cryptographic public key using SHA256 hash of random bytes
-        // In production, this should be replaced with proper asymmetric key generation (e.g., Ed25519)
-        let mut rng = rand::thread_rng();
-        let random_bytes: [u8; 32] = rng.gen();
-        let mut hasher = Sha256::new();
-        hasher.update(random_bytes);
-        let public_key = format!("{:x}", hasher.finalize());
+        // A real Ed25519 keypair. This used to be the SHA-256 of some random
+        // bytes, which looked like a key and could not verify anything: there
+        // was no private half, so nothing could ever be signed with it.
+        let identity = NodeIdentity::generate_named(id.clone());
+        let public_key = identity.public_key_hex();
 
         Self {
             id: id.clone(),
+            identity: Some(Arc::new(identity)),
             public_key,
             compute_capacity: 1.0,
             bandwidth_capacity: 1.0,
@@ -246,11 +255,57 @@ impl Node {
         }
     }
 
+    /// A node with a chosen name and a keypair that signs under that name.
+    ///
+    /// Prefer this over assigning to `id` after construction: the identity is
+    /// generated with the name baked into it, so renaming the node afterwards
+    /// leaves it signing under a name it no longer presents, and its
+    /// attestations stop counting toward the name anyone else sees.
+    pub fn named(id: impl Into<NodeId>) -> Self {
+        Self::new().with_identity(NodeIdentity::generate_named(id))
+    }
+
+    /// Whether this node's signing key matches the name it presents.
+    ///
+    /// False after `node.id` has been reassigned without the identity, which is
+    /// the one way to end up signing under the wrong name.
+    pub fn identity_matches_name(&self) -> bool {
+        self.identity
+            .as_ref()
+            .is_some_and(|identity| identity.node_id() == self.id)
+    }
+
+    /// Adopt a specific identity, replacing the generated one.
+    ///
+    /// Use when a node's name is chosen rather than derived, so that its
+    /// signatures are made under the name it presents.
+    pub fn with_identity(mut self, identity: NodeIdentity) -> Self {
+        self.id = identity.node_id().to_string();
+        self.public_key = identity.public_key_hex();
+        self.identity = Some(Arc::new(identity));
+        self
+    }
+
+    /// Sign a signal on this node's behalf, if it holds a private key.
+    ///
+    /// Refuses when the key signs under a different name than the node
+    /// presents, because such a signature verifies but attributes the claim to
+    /// a name nobody is listening for.
+    pub fn attest(&self, signal: &mut Signal) {
+        if !self.identity_matches_name() {
+            return;
+        }
+        if let Some(identity) = &self.identity {
+            signal.attest(identity);
+        }
+    }
+
     /// Everyone who attests to a signal: its origin plus every reinforcer.
     ///
-    /// Reinforcement is an *independent* attestation to the same claim, so the
-    /// size of this set is how many parties corroborate it. Relaying a signal
-    /// does not put you in it — only asserting it does.
+    /// This is the *local* view, and it trusts the names it is given. It is
+    /// correct for a single-process simulation, where nothing is adversarial.
+    /// Anything that came off a network should be counted with
+    /// [`Signal::verified_attesters`] instead, which counts signatures.
     pub fn attesters(signal: &Signal) -> Vec<String> {
         let mut out = Vec::with_capacity(signal.reinforced_by.len() + 1);
         if !signal.origin_node_id.is_empty() {

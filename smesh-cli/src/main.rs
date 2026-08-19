@@ -457,18 +457,16 @@ async fn main() -> Result<()> {
             bucket_ms,
             consensus_threshold,
             settle_ms,
-        } => {
-            analysis::orchestrate::run(analysis::orchestrate::RunConfig {
-                out_dir: out,
-                base_port,
-                seed,
-                bucket_ms,
-                consensus_threshold,
-                settle_ms,
-            })
-            .await
-            .map(|_| ())
-        }
+        } => analysis::orchestrate::run(analysis::orchestrate::RunConfig {
+            out_dir: out,
+            base_port,
+            seed,
+            bucket_ms,
+            consensus_threshold,
+            settle_ms,
+        })
+        .await
+        .map(|_| ()),
         Commands::Analyze {
             concern,
             bind,
@@ -1400,10 +1398,10 @@ async fn cmd_mesh(
         .collect::<Result<_>>()?;
 
     // One node per process: this is the identity we present on the wire.
-    let mut node = Node::new();
-    if let Some(name) = name {
-        node.id = name;
-    }
+    let mut node = match name {
+        Some(name) => Node::named(name),
+        None => Node::new(),
+    };
     let node_id = node.id.clone();
 
     let mut network = Network::new();

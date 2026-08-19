@@ -140,24 +140,31 @@ impl SmeshRuntime {
         config: MeshConfig,
         local_node_id: &str,
     ) -> Result<MeshHandle, TransportError> {
-        {
+        let local_public_key = {
             let network = self.network.read().await;
-            if !network.nodes.contains_key(local_node_id) {
+            let Some(node) = network.nodes.get(local_node_id) else {
                 return Err(TransportError::ConnectionFailed(format!(
                     "node {local_node_id} is not in this runtime's network"
                 )));
+            };
+            if node.identity.is_none() {
+                return Err(TransportError::ConnectionFailed(format!(
+                    "node {local_node_id} holds no signing key, so it cannot attest to anything"
+                )));
             }
-        }
+            node.public_key.clone()
+        };
 
-        let (handle, transport) = mesh::start(
+        let (handle, transport) = mesh::start(mesh::MeshStartup {
             config,
-            local_node_id.to_string() as NodeId,
-            Arc::clone(&self.network),
-            Arc::clone(&self.peers),
-            self.event_tx.clone(),
-            Arc::clone(&self.journal),
-            Arc::clone(&self.peer_names),
-        )
+            local_node_id: local_node_id.to_string() as NodeId,
+            local_public_key,
+            network: Arc::clone(&self.network),
+            peers: Arc::clone(&self.peers),
+            event_tx: self.event_tx.clone(),
+            journal: Arc::clone(&self.journal),
+            conn_ids: Arc::clone(&self.peer_names),
+        })
         .await?;
 
         *self.transport.write().await = Some(transport);
@@ -205,17 +212,37 @@ impl SmeshRuntime {
 
         // Stamp the emitting node as the signal's origin and seed its diffusion
         // frontier there, so the signal can spread outward from this node.
-        signal.origin_node_id = node_id.to_string();
+        //
+        // Only stamp when the builder left it unset. Overwriting an origin that
+        // is already part of the content hash would leave the signal claiming
+        // one origin in its address and a different one in its field, and the
+        // two would disagree forever after.
+        if signal.origin_node_id.is_empty() {
+            signal.origin_node_id = node_id.to_string();
+        }
         signal.mark_reached(node_id);
 
         let hash = signal.origin_hash.clone();
         let first_assertion = !network.field.signals.contains_key(&hash);
 
+        // Sign the claim. This is what makes our agreement countable by anyone
+        // else: without it we are just another name in a list.
+        let attestation = network
+            .nodes
+            .get(node_id)
+            .and_then(|n| n.identity.as_ref().map(|identity| identity.attest(&hash)));
+
         if first_assertion {
+            if let Some(attestation) = attestation {
+                signal.merge_attestations(&[attestation]);
+            }
             network.field.signals.insert(hash.clone(), signal);
         } else if let Some(existing) = network.field.signals.get_mut(&hash) {
             existing.reinforce(node_id);
             existing.mark_reached(node_id);
+            if let Some(attestation) = attestation {
+                existing.merge_attestations(&[attestation]);
+            }
         }
 
         // Update node stats
@@ -233,7 +260,7 @@ impl SmeshRuntime {
             s.reached_nodes.clear();
             s
         });
-        let attesters = stored.map(Node::attesters).unwrap_or_default();
+        let attesters = stored.map(|s| s.verified_attesters()).unwrap_or_default();
         let payload = stored
             .map(|s| payload_preview(&s.payload, 512))
             .unwrap_or(serde_json::Value::Null);
@@ -321,7 +348,7 @@ impl SmeshRuntime {
                         "intensity": s.current_intensity,
                         "confidence": s.confidence,
                         "effective": s.effective_intensity(network.field.current_time),
-                        "attesters": Node::attesters(s),
+                        "attesters": s.verified_attesters(),
                         "hops": s.hops,
                         "age_secs": (network.field.current_time - s.created_at)
                             .num_milliseconds() as f64
