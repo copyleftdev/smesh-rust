@@ -4,10 +4,12 @@
 
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use uuid::Uuid;
 
+use std::sync::Arc;
+
+use crate::identity::NodeIdentity;
 use crate::{Signal, DEFAULT_TRUST, MAX_TRUST, MIN_TRUST};
 
 /// Unique identifier for a node
@@ -46,8 +48,16 @@ pub struct Node {
     /// Unique identifier
     pub id: NodeId,
 
-    /// Public key for identity verification
+    /// Public key for identity verification, hex encoded.
     pub public_key: String,
+
+    /// The private half, present only for a node this process actually is.
+    ///
+    /// Skipped by serde in both directions: a secret key must never reach a
+    /// journal, a snapshot or the wire. A node decoded from any of those is a
+    /// *view* of a peer and cannot sign, which is exactly right.
+    #[serde(skip)]
+    pub identity: Option<Arc<NodeIdentity>>,
 
     /// Relative compute capacity
     pub compute_capacity: f64,
@@ -96,6 +106,28 @@ pub struct NodeStats {
     pub escalations_triggered: u64,
 }
 
+/// The full reasoning behind a relay choice.
+///
+/// Relaying is probabilistic: `relay` is `roll < propagation_score`. Recording
+/// both makes an otherwise unreproducible decision auditable after the fact.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelayDecision {
+    /// Whether the signal is forwarded.
+    pub relay: bool,
+    /// Intensity multiplier applied to the forwarded copy.
+    pub dampening: f64,
+    /// Probability the relay was granted with.
+    pub propagation_score: f64,
+    /// This node's trust in the signal's origin.
+    pub origin_trust: f64,
+    /// The draw that resolved the decision.
+    pub roll: f64,
+    /// Hops left in the signal's budget when it was considered.
+    pub remaining_hops: u32,
+    /// Set when the signal was refused outright, before any roll.
+    pub veto: Option<String>,
+}
+
 impl Node {
     /// Create a new node with default configuration
     pub fn new() -> Self {
@@ -106,16 +138,15 @@ impl Node {
     pub fn with_config(config: NodeConfig) -> Self {
         let id = Uuid::new_v4().to_string()[..8].to_string();
 
-        // Generate cryptographic public key using SHA256 hash of random bytes
-        // In production, this should be replaced with proper asymmetric key generation (e.g., Ed25519)
-        let mut rng = rand::thread_rng();
-        let random_bytes: [u8; 32] = rng.gen();
-        let mut hasher = Sha256::new();
-        hasher.update(random_bytes);
-        let public_key = format!("{:x}", hasher.finalize());
+        // A real Ed25519 keypair. This used to be the SHA-256 of some random
+        // bytes, which looked like a key and could not verify anything: there
+        // was no private half, so nothing could ever be signed with it.
+        let identity = NodeIdentity::generate_named(id.clone());
+        let public_key = identity.public_key_hex();
 
         Self {
             id: id.clone(),
+            identity: Some(Arc::new(identity)),
             public_key,
             compute_capacity: 1.0,
             bandwidth_capacity: 1.0,
@@ -170,28 +201,140 @@ impl Node {
 
     /// Decide whether to relay a signal and with what dampening
     pub fn should_relay(&self, signal: &Signal, remaining_hops: u32) -> (bool, f64) {
+        let decision = self.relay_decision(signal, remaining_hops);
+        (decision.relay, decision.dampening)
+    }
+
+    /// Decide whether to relay a signal, returning the full reasoning.
+    ///
+    /// [`Node::should_relay`] is the terse form. This one exposes the score,
+    /// the trust that fed it and the die roll that resolved it, so a relay
+    /// choice can be journalled and replayed rather than merely observed.
+    pub fn relay_decision(&self, signal: &Signal, remaining_hops: u32) -> RelayDecision {
+        let roll = rand::thread_rng().gen::<f64>();
+        self.relay_decision_with(signal, remaining_hops, roll)
+    }
+
+    /// The relay decision with the draw supplied by the caller.
+    ///
+    /// Relaying is the protocol's only genuine coin flip, and hiding the draw
+    /// inside this function made the whole diffusion path impossible to replay.
+    /// Taking it as an argument makes the decision a pure function of state: a
+    /// simulation can sweep seeds, and a failing schedule can be reproduced
+    /// exactly rather than described.
+    pub fn relay_decision_with(
+        &self,
+        signal: &Signal,
+        remaining_hops: u32,
+        roll: f64,
+    ) -> RelayDecision {
+        let origin_trust = self.get_trust(&signal.origin_node_id);
+        let dampening = if origin_trust > 0.7 { 0.9 } else { 0.7 };
+
+        let vetoed = |reason: &str| RelayDecision {
+            relay: false,
+            dampening: 0.0,
+            propagation_score: 0.0,
+            origin_trust,
+            roll: 0.0,
+            remaining_hops,
+            veto: Some(reason.to_string()),
+        };
+
         if remaining_hops == 0 {
-            return (false, 0.0);
+            return vetoed("hop budget exhausted");
         }
 
         // Eclipse attackers black-hole traffic: they accept signals but never
         // forward them, blocking diffusion paths that route through them.
         if self.is_malicious && self.malicious_behavior == MaliciousBehavior::Eclipse {
-            return (false, 0.0);
+            return vetoed("eclipse node black-holes traffic");
         }
 
-        let origin_trust = self.get_trust(&signal.origin_node_id);
         let effective = signal.confidence * signal.current_intensity;
 
         // Propagation score
-        let prop_score = effective * origin_trust * (remaining_hops as f64 / signal.radius as f64);
+        let propagation_score =
+            effective * origin_trust * (remaining_hops as f64 / signal.radius as f64);
 
-        // Probabilistic relay decision using cryptographically secure RNG
-        let mut rng = rand::thread_rng();
-        let should_relay = rng.gen::<f64>() < prop_score;
-        let dampening = if origin_trust > 0.7 { 0.9 } else { 0.7 };
+        RelayDecision {
+            relay: roll < propagation_score,
+            dampening,
+            propagation_score,
+            origin_trust,
+            roll,
+            remaining_hops,
+            veto: None,
+        }
+    }
 
-        (should_relay, dampening)
+    /// A node with a chosen name and a keypair that signs under that name.
+    ///
+    /// Prefer this over assigning to `id` after construction: the identity is
+    /// generated with the name baked into it, so renaming the node afterwards
+    /// leaves it signing under a name it no longer presents, and its
+    /// attestations stop counting toward the name anyone else sees.
+    pub fn named(id: impl Into<NodeId>) -> Self {
+        Self::new().with_identity(NodeIdentity::generate_named(id))
+    }
+
+    /// Whether this node's signing key matches the name it presents.
+    ///
+    /// False after `node.id` has been reassigned without the identity, which is
+    /// the one way to end up signing under the wrong name.
+    pub fn identity_matches_name(&self) -> bool {
+        self.identity
+            .as_ref()
+            .is_some_and(|identity| identity.node_id() == self.id)
+    }
+
+    /// Adopt a specific identity, replacing the generated one.
+    ///
+    /// Use when a node's name is chosen rather than derived, so that its
+    /// signatures are made under the name it presents.
+    pub fn with_identity(mut self, identity: NodeIdentity) -> Self {
+        self.id = identity.node_id().to_string();
+        self.public_key = identity.public_key_hex();
+        self.identity = Some(Arc::new(identity));
+        self
+    }
+
+    /// Whether this node would relay, for a given draw. Pure.
+    pub fn would_relay(&self, signal: &Signal, remaining_hops: u32, roll: f64) -> bool {
+        self.relay_decision_with(signal, remaining_hops, roll).relay
+    }
+
+    /// Sign a signal on this node's behalf, if it holds a private key.
+    ///
+    /// Refuses when the key signs under a different name than the node
+    /// presents, because such a signature verifies but attributes the claim to
+    /// a name nobody is listening for.
+    pub fn attest(&self, signal: &mut Signal) {
+        if !self.identity_matches_name() {
+            return;
+        }
+        if let Some(identity) = &self.identity {
+            signal.attest(identity);
+        }
+    }
+
+    /// Everyone who attests to a signal: its origin plus every reinforcer.
+    ///
+    /// This is the *local* view, and it trusts the names it is given. It is
+    /// correct for a single-process simulation, where nothing is adversarial.
+    /// Anything that came off a network should be counted with
+    /// [`Signal::verified_attesters`] instead, which counts signatures.
+    pub fn attesters(signal: &Signal) -> Vec<String> {
+        let mut out = Vec::with_capacity(signal.reinforced_by.len() + 1);
+        if !signal.origin_node_id.is_empty() {
+            out.push(signal.origin_node_id.clone());
+        }
+        for id in &signal.reinforced_by {
+            if !out.contains(id) {
+                out.push(id.clone());
+            }
+        }
+        out
     }
 
     /// Decide whether to trigger SMESH+ escalation

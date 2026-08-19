@@ -63,3 +63,18 @@ owasp-results.json
 adjudication-report.html
 adjudication-results.json
 smesh-demo.mp4
+
+# Recorded mesh runs (journals + merged timelines)
+runs/
+
+
+# Rendered film output (large, regenerable)
+film/out/
+film/src/audio/
+film/src/frames/
+film/src/node_modules/
+
+# TLC is fetched on demand by verify/tla.sh
+verify/tla/tla2tools.jar
+verify/tla/states/
+verify/tla/*.old

@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Read-only by default: nothing here needs to write to the repository, and a
+# workflow that cannot push cannot be turned into one that does.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  test:
+    name: test and lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        # Scoped to the crates this workflow is responsible for. The older CLI
+        # modules predate it and are not reformatted as a side effect of CI.
+        run: cargo fmt -p smesh-core -p smesh-runtime -- --check
+
+      - name: Clippy
+        run: |
+          cargo clippy -p smesh-core --lib -- -D warnings
+          cargo clippy -p smesh-runtime --lib --tests -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Test again
+        # The mesh tests start real QUIC endpoints on real sockets and depend on
+        # timing. Running twice catches the flake that only shows up sometimes,
+        # which is the kind this suite is most likely to grow.
+        run: cargo test --workspace
+
+  demo:
+    name: analysis run end to end
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --bin smesh
+
+      - name: Orchestrate five real processes and validate the journal
+        run: |
+          ./target/debug/smesh orchestrate --out runs/ci | tee /tmp/run.log
+
+          # The demo's whole claim is that the mesh separates cause from
+          # symptom from noise. Assert it rather than eyeballing the output.
+          grep -q "checkout-api          CONSENSUS" /tmp/run.log \
+            || { echo "::error::root cause did not reach consensus"; exit 1; }
+          grep -q "payments-api          no consensus (3/4" /tmp/run.log \
+            || { echo "::error::downstream casualty was miscounted"; exit 1; }
+          grep -q "journal is internally consistent and safe to replay" /tmp/run.log \
+            || { echo "::error::journal validation failed"; exit 1; }
+
+      - name: Upload the recorded run
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: analysis-run
+          path: runs/ci/
+          retention-days: 7

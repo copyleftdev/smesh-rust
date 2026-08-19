@@ -494,7 +494,10 @@ mod tests {
         for _ in 0..300 {
             network.tick(0.0);
             let reach = network.field.get_signal(&hash).unwrap().reached_nodes.len();
-            assert!(reach >= prev_reach, "reach must be monotonically non-decreasing");
+            assert!(
+                reach >= prev_reach,
+                "reach must be monotonically non-decreasing"
+            );
             prev_reach = reach;
             if reach == network.nodes.len() {
                 break;

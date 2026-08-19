@@ -15,6 +15,7 @@ bincode = { workspace = true }
 toon = { workspace = true }
 thiserror = { workspace = true }
 sha2 = { workspace = true }
+ed25519-dalek = { workspace = true }
 rand = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }

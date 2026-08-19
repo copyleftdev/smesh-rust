@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::{compute_signal_genome, DEFAULT_DECAY_RATE, DEFAULT_TTL};
+use crate::identity::{Attestation, NodeIdentity};
+use crate::{compute_signal_genome, NodeId, DEFAULT_DECAY_RATE, DEFAULT_TTL};
 
 /// Types of signals in SMESH
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -45,6 +46,12 @@ pub enum DecayFunction {
     /// Step function: full intensity until TTL, then zero
     Step,
 }
+
+/// Most attesters a single signal will carry.
+///
+/// Attestations arrive from peers and are relayed onward, so an unbounded list
+/// is something one peer can grow at everyone else's expense.
+pub const MAX_ATTESTATIONS: usize = 64;
 
 /// A signal in the SMESH field
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,6 +116,16 @@ pub struct Signal {
     /// Protocol checksum (carries build DNA for attribution)
     #[serde(default)]
     pub protocol_checksum: String,
+
+    /// Signed statements that a node stands behind this claim.
+    ///
+    /// This is the trustworthy counterpart to `reinforced_by`. That field is a
+    /// list of names anyone can write; these are signatures over
+    /// [`Signal::origin_hash`], so they cannot be fabricated for a key the
+    /// sender does not hold, nor lifted from a different claim. Anything
+    /// arriving over a network should be counted from here.
+    #[serde(default)]
+    pub attestations: Vec<Attestation>,
 }
 
 impl Signal {
@@ -186,6 +203,88 @@ impl Signal {
         }
     }
 
+    /// Sign this signal, recording that `identity` stands behind the claim.
+    ///
+    /// Idempotent: a node attesting twice adds nothing, which is what makes
+    /// re-assertion safe to do on a timer.
+    pub fn attest(&mut self, identity: &NodeIdentity) {
+        let mine = identity.public_key_hex();
+
+        // Skip only if *we* already attested. Matching on name alone let
+        // someone who squatted the name in first block the real holder from
+        // ever signing its own claim.
+        if self
+            .attestations
+            .iter()
+            .any(|a| a.node_id == identity.node_id() && a.public_key == mine)
+        {
+            return;
+        }
+
+        // Drop any impostor entry for this name: we hold the key, they do not.
+        self.attestations
+            .retain(|a| a.node_id != identity.node_id());
+
+        self.attestations.push(identity.attest(&self.origin_hash));
+    }
+
+    /// Everyone whose signature over this claim actually checks out.
+    ///
+    /// The count of this is the protocol's central measurement: how many
+    /// independent parties assert the same thing. Unverifiable entries are
+    /// dropped silently rather than counted.
+    pub fn verified_attesters(&self) -> Vec<NodeId> {
+        let mut attesters = Vec::with_capacity(self.attestations.len());
+        for attestation in &self.attestations {
+            if attestation.verify(&self.origin_hash) && !attesters.contains(&attestation.node_id) {
+                attesters.push(attestation.node_id.clone());
+            }
+        }
+        attesters
+    }
+
+    /// Merge attestations from a peer's copy, keeping only what verifies.
+    ///
+    /// Returns the names newly added, which is what tells a gossip layer
+    /// whether its knowledge grew and therefore whether to pass the message on.
+    ///
+    /// An attestation is refused when its signature does not check out, or when
+    /// it claims a name this signal already has under a *different* key. The
+    /// second case is a same-claim impersonation attempt, and the first
+    /// attestation seen wins.
+    pub fn merge_attestations(&mut self, incoming: &[Attestation]) -> Vec<NodeId> {
+        let mut added = Vec::new();
+
+        for attestation in incoming {
+            // A peer controls how many of these it sends, and each one costs a
+            // signature verification and a slot in memory that then travels on
+            // to everyone else. Cap it: no real claim needs more attesters than
+            // there are nodes worth listening to.
+            if self.attestations.len() >= MAX_ATTESTATIONS {
+                break;
+            }
+
+            if !attestation.verify(&self.origin_hash) {
+                continue;
+            }
+
+            match self
+                .attestations
+                .iter()
+                .find(|a| a.node_id == attestation.node_id)
+            {
+                Some(existing) if existing.public_key == attestation.public_key => continue,
+                Some(_) => continue, // name already bound to a different key
+                None => {}
+            }
+
+            added.push(attestation.node_id.clone());
+            self.attestations.push(attestation.clone());
+        }
+
+        added
+    }
+
     /// Create a propagated copy with dampening
     pub fn propagate(&self, dampening: f64) -> Signal {
         let mut propagated = self.clone();
@@ -225,7 +324,11 @@ impl Signal {
         hasher.update(format!("{:?}", signal_type).as_bytes());
         hasher.update(payload);
         hasher.update(origin_node_id.as_bytes());
-        format!("{:x}", hasher.finalize())[..16].to_string()
+        // 128 bits. The previous 64 was fine against accident but thin against
+        // an adversary hunting collisions, which now matters: attestations are
+        // signatures over this hash, so two claims sharing one would let
+        // agreement on the first be presented as agreement on the second.
+        format!("{:x}", hasher.finalize())[..32].to_string()
     }
 }
 
@@ -319,7 +422,32 @@ impl SignalBuilder {
         self
     }
 
+    /// Address this signal by its content alone.
+    ///
+    /// The content hash normally covers the origin, which makes a signal
+    /// *mine*: two nodes saying the same thing produce two distinct signals.
+    /// A correlatable signal drops the origin from the address, so independent
+    /// emitters of the same claim converge on one signal and are recorded as
+    /// corroborating each other.
+    ///
+    /// This is the difference between an utterance and an assertion about the
+    /// world. Use it whenever the point is that several parties agree. The
+    /// origin is still stamped on the signal for attribution; it just stays out
+    /// of the address, because the address is the claim, not the claimant.
+    ///
+    /// Anything correlatable must therefore keep evidence out of the payload —
+    /// evidence differs per node and would make every address unique again.
+    pub fn correlatable(mut self) -> Self {
+        self.origin_node_id = String::new();
+        self
+    }
+
     /// Set the origin node ID
+    ///
+    /// This folds the origin into the content hash, so the resulting signal is
+    /// unique to this node even if another node says exactly the same thing.
+    /// For a claim meant to accumulate corroboration, use
+    /// [`SignalBuilder::correlatable`] instead.
     pub fn origin(mut self, node_id: &str) -> Self {
         self.origin_node_id = node_id.to_string();
         self
@@ -353,6 +481,7 @@ impl SignalBuilder {
             hops: 0,
             reached_nodes: Vec::new(),
             protocol_checksum,
+            attestations: Vec::new(),
         }
     }
 }
@@ -361,6 +490,46 @@ impl SignalBuilder {
 mod tests {
     use super::*;
     use crate::PROTOCOL_DNA;
+
+    #[test]
+    fn a_peer_cannot_grow_the_attestation_list_without_bound() {
+        let mut signal = Signal::builder(SignalType::Data)
+            .payload(b"claim".to_vec())
+            .build();
+
+        let flood: Vec<Attestation> = (0..MAX_ATTESTATIONS * 2)
+            .map(|i| NodeIdentity::generate_named(format!("n{i}")).attest(&signal.origin_hash))
+            .collect();
+
+        signal.merge_attestations(&flood);
+        assert_eq!(signal.attestations.len(), MAX_ATTESTATIONS);
+    }
+
+    #[test]
+    fn squatting_a_name_does_not_stop_the_real_holder_signing() {
+        let real = NodeIdentity::generate_named("latency");
+        let impostor = NodeIdentity::generate_named("latency");
+
+        let mut signal = Signal::builder(SignalType::Data)
+            .payload(b"claim".to_vec())
+            .build();
+
+        // The impostor gets there first under the same name.
+        signal.merge_attestations(&[impostor.attest(&signal.origin_hash)]);
+        real.attest(&signal.origin_hash);
+        signal.attest(&real);
+
+        let keys: Vec<&str> = signal
+            .attestations
+            .iter()
+            .map(|a| a.public_key.as_str())
+            .collect();
+        assert!(
+            keys.contains(&real.public_key_hex().as_str()),
+            "the real holder must still be able to sign its own claim"
+        );
+        assert_eq!(signal.verified_attesters(), vec!["latency".to_string()]);
+    }
 
     #[test]
     fn test_signal_dna_fingerprint() {

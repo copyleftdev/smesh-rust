@@ -32,6 +32,7 @@ async-trait = "0.1"
 
 # Crypto
 sha2 = "0.10"
+ed25519-dalek = { version = "2.1", features = ["rand_core", "serde", "pkcs8"] }
 rand = "0.8"
 uuid = { version = "1.6", features = ["v4", "serde"] }
 
@@ -50,7 +51,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4.4", features = ["derive"] }
 
 # HTTP (for OpenRouter / Claude APIs)
-reqwest = { version = "0.11", features = ["json"] }
+# rustls rather than native-tls: one less C dependency, and it is what makes a
+# fully static musl build possible. The QUIC layer already speaks rustls.
+reqwest = { version = "0.11", default-features = false, features = [
+    "json",
+    "rustls-tls",
+] }
 
 # Time
 chrono = { version = "0.4", features = ["serde"] }

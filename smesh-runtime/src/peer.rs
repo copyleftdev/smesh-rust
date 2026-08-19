@@ -16,8 +16,14 @@ pub type PeerId = String;
 pub struct Peer {
     /// Peer identifier (maps to NodeId)
     pub id: PeerId,
-    /// Network address
+    /// The address this peer says it listens on.
     pub addr: SocketAddr,
+    /// Where this peer's packets were seen arriving from.
+    ///
+    /// Differs from `addr` when the peer is behind NAT, and is then the only
+    /// address anyone else has a chance of reaching it on.
+    #[serde(default)]
+    pub observed_addr: Option<SocketAddr>,
     /// Associated SMESH node
     pub node_id: NodeId,
     /// Connection state
@@ -49,6 +55,7 @@ impl Peer {
         Self {
             id,
             addr,
+            observed_addr: None,
             node_id,
             state: PeerState::Discovered,
             last_seen: 0,
@@ -131,6 +138,15 @@ impl PeerManager {
         let mut peers = self.peers.write().await;
         if let Some(peer) = peers.get_mut(peer_id) {
             peer.state = state;
+            peer.touch();
+        }
+    }
+
+    /// Record a round-trip time measured by a pong, refreshing liveness.
+    pub async fn record_latency(&self, peer_id: &str, latency_ms: u64) {
+        let mut peers = self.peers.write().await;
+        if let Some(peer) = peers.get_mut(peer_id) {
+            peer.latency_ms = latency_ms;
             peer.touch();
         }
     }
