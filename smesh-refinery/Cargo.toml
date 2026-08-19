@@ -1,0 +1,19 @@
+[package]
+name = "smesh-refinery"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The refinery: Tier 1/2 world-model experts over SMESH LLM backends, corpus in, staged changeset out"
+
+[dependencies]
+smesh-world = { path = "../smesh-world" }
+smesh-agent = { path = "../smesh-agent" }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

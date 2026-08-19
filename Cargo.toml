@@ -6,6 +6,9 @@ members = [
     "smesh-agent",
     "smesh-bounty",
     "smesh-cli",
+    "smesh-world",
+    "smesh-refinery",
+    "smesh-ratify",
 ]
 
 [workspace.package]
@@ -32,7 +35,17 @@ async-trait = "0.1"
 
 # Crypto
 sha2 = "0.10"
-ed25519-dalek = { version = "2.1", features = ["rand_core", "serde", "pkcs8"] }
+ed25519-dalek = { version = "2.2", features = ["rand_core", "serde", "pkcs8"] }
+blake3 = "1.5"
+
+# PDF (Tier 0 intake + Meridian renderer)
+# default-features off: lopdf's `rayon` feature parses objects on the
+# global thread pool, which is nondeterministic under test parallelism.
+lopdf = { version = "0.36", default-features = false }
+pdf-extract = "0.10"
+
+# Ratification dashboard
+axum = "0.8"
 rand = "0.8"
 uuid = { version = "1.6", features = ["v4", "serde"] }
 

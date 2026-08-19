@@ -78,3 +78,11 @@ film/src/node_modules/
 verify/tla/tla2tools.jar
 verify/tla/states/
 verify/tla/*.old
+
+# Refinery run artifacts
+refinery-staged.json*
+
+# Reviewer signing keys and ratification sessions
+.ratify/
+demo-session.*
+*.reviewer.key

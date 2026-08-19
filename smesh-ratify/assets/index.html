@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ratification Bench — SMESH World Model</title>
+<meta name="description" content="Review, amend, and sign the staged world-model changeset. The mesh proposes; you dispose.">
+<meta name="theme-color" content="#05375E">
+<meta property="og:title" content="Ratification Bench">
+<meta property="og:description" content="Human sign-off over machine-extracted organizational knowledge.">
+<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="%2305375E"/><circle cx="16" cy="14" r="7.5" fill="none" stroke="%236CDCD8" stroke-width="2"/><path d="M12.5 14.2l2.4 2.4 4.6-4.8" fill="none" stroke="%236CDCD8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M11 23h10" stroke="%236CDCD8" stroke-width="2" stroke-linecap="round"/><path d="M13 26h6" stroke="%236CDCD8" stroke-width="2" stroke-linecap="round" opacity=".55"/></svg>'>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@500;600;700&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Red+Hat+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --navy:oklch(0.33 0.075 247);          /* zuub #05375E */
+  --navy-deep:oklch(0.26 0.06 247);
+  --indigo:oklch(0.37 0.08 272);         /* zuub #2B3C6A */
+  --blue:oklch(0.55 0.13 253);           /* zuub #1870C9 */
+  --teal:oklch(0.83 0.09 187);           /* zuub #6CDCD8 */
+  --teal-ink:oklch(0.46 0.085 195);
+  --cyan:oklch(0.76 0.12 215);
+  --paper:oklch(0.985 0.005 247);
+  --paper-tint:oklch(0.958 0.013 247);   /* zuub #E9F1FB family */
+  --paper-deep:oklch(0.93 0.02 247);
+  --ink:oklch(0.29 0.05 247);
+  --ink-soft:oklch(0.45 0.04 247);
+  --ink-faint:oklch(0.58 0.03 247);
+  --hairline:oklch(0.87 0.02 247);
+  --red:oklch(0.5 0.16 22);
+  --red-tint:oklch(0.95 0.025 22);
+  --amber:oklch(0.55 0.11 70);
+  --amber-tint:oklch(0.955 0.03 85);
+  --green-ink:oklch(0.46 0.09 175);
+  --green-tint:oklch(0.95 0.03 180);
+  --space-xs:4px; --space-sm:8px; --space-md:16px; --space-lg:24px; --space-xl:48px; --space-2xl:96px;
+  --font-display:"Familjen Grotesk",sans-serif;
+  --font-body:"Atkinson Hyperlegible",sans-serif;
+  --font-mono:"Red Hat Mono",monospace;
+}
+*{box-sizing:border-box;margin:0}
+html{color-scheme:light}
+body{
+  font-family:var(--font-body);font-size:1rem;line-height:1.55;color:var(--ink);
+  background:var(--paper);
+  min-height:100vh;
+}
+::selection{background:var(--teal);color:var(--navy-deep)}
+
+/* ---------- shell ---------- */
+.shell{display:grid;grid-template-columns:340px 1fr;min-height:100vh}
+@media (max-width:960px){.shell{grid-template-columns:1fr}}
+
+/* ---------- rail ---------- */
+.rail{
+  background:var(--navy);color:oklch(0.93 0.02 230);
+  padding:var(--space-lg) var(--space-lg) var(--space-xl);
+  display:flex;flex-direction:column;gap:var(--space-lg);
+  position:sticky;top:0;height:100vh;overflow-y:auto;
+}
+@media (max-width:960px){.rail{position:static;height:auto}}
+.wordmark{display:flex;align-items:center;gap:12px}
+.wordmark svg{flex:none}
+.wordmark h1{font-family:var(--font-display);font-weight:600;font-size:1.3rem;letter-spacing:.01em;color:oklch(0.97 0.01 230)}
+.wordmark small{display:block;font-family:var(--font-mono);font-size:.68rem;font-weight:400;color:oklch(0.75 0.05 190);letter-spacing:.08em;text-transform:uppercase}
+.rail .kv{display:grid;grid-template-columns:auto 1fr;gap:2px 14px;font-size:.82rem}
+.rail .kv dt{color:oklch(0.72 0.04 230)}
+.rail .kv dd{font-family:var(--font-mono);font-size:.78rem;overflow-wrap:anywhere;color:oklch(0.9 0.02 230)}
+.progress-block h2{font-family:var(--font-display);font-size:.85rem;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:oklch(0.78 0.05 200);margin-bottom:var(--space-sm)}
+.meter{height:8px;border-radius:4px;background:oklch(0.28 0.05 247);overflow:hidden}
+.meter i{display:block;height:100%;background:var(--teal);border-radius:4px;transition:width .5s cubic-bezier(.22,1,.36,1)}
+.meter-label{margin-top:6px;font-size:.82rem;color:oklch(0.85 0.03 220)}
+.lane-tally{display:flex;gap:var(--space-md);margin-top:var(--space-md);font-size:.8rem}
+.lane-tally span{display:flex;align-items:center;gap:6px;color:oklch(0.85 0.03 220)}
+.dot{width:9px;height:9px;border-radius:50%}
+.dot.red{background:oklch(0.62 0.17 22)}.dot.amber{background:oklch(0.75 0.12 80)}.dot.green{background:var(--teal)}
+
+.sign-block{margin-top:auto;padding-top:var(--space-lg);border-top:1px solid oklch(0.4 0.05 247)}
+.sign-block p{font-size:.8rem;color:oklch(0.75 0.04 230);margin-bottom:var(--space-md)}
+button.sign{
+  width:100%;display:flex;align-items:center;justify-content:center;gap:10px;
+  font-family:var(--font-display);font-weight:600;font-size:1rem;letter-spacing:.02em;
+  padding:14px 18px;border-radius:8px;border:none;cursor:pointer;
+  background:var(--teal);color:var(--navy-deep);
+  transition:transform .15s ease,box-shadow .15s ease,background .15s ease;
+}
+button.sign:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 6px 18px oklch(0.7 0.1 190 / .35)}
+button.sign:disabled{background:oklch(0.42 0.04 247);color:oklch(0.68 0.02 247);cursor:not-allowed}
+.receipt{
+  border:1px solid oklch(0.55 0.08 190);border-radius:10px;padding:var(--space-md);
+  background:oklch(0.3 0.06 240);
+}
+.receipt h3{font-family:var(--font-display);font-size:.95rem;color:var(--teal);display:flex;gap:8px;align-items:center;margin-bottom:8px}
+.receipt code{font-family:var(--font-mono);font-size:.72rem;color:oklch(0.9 0.02 220);overflow-wrap:anywhere;display:block}
+.receipt .meta{margin-top:8px;font-size:.78rem;color:oklch(0.78 0.04 220)}
+
+/* ---------- bench ---------- */
+.bench{padding:var(--space-xl) clamp(24px,5vw,72px) var(--space-2xl);max-width:1060px}
+.bench-head{margin-bottom:var(--space-xl)}
+.bench-head .eyebrow{font-family:var(--font-mono);font-size:.75rem;letter-spacing:.14em;text-transform:uppercase;color:var(--teal-ink)}
+.bench-head h2{font-family:var(--font-display);font-weight:700;font-size:clamp(1.7rem,3.2vw,2.4rem);line-height:1.12;color:var(--navy);margin-top:6px;max-width:22ch}
+.bench-head p{margin-top:var(--space-md);max-width:58ch;color:var(--ink-soft)}
+
+section.lane{margin-bottom:var(--space-xl)}
+.lane-head{display:flex;align-items:baseline;gap:14px;margin-bottom:var(--space-md);flex-wrap:wrap}
+.lane-head svg{align-self:center;flex:none}
+.lane-head h3{font-family:var(--font-display);font-weight:600;font-size:1.15rem;color:var(--navy)}
+.lane-head .count{font-family:var(--font-mono);font-size:.78rem;color:var(--ink-faint)}
+.lane-head .note{font-size:.85rem;color:var(--ink-faint);flex-basis:100%;max-width:60ch}
+.lane-red .lane-head h3{color:var(--red)}
+button.batch{
+  margin-left:auto;font-family:var(--font-display);font-weight:600;font-size:.82rem;
+  border:1.5px solid var(--teal-ink);color:var(--teal-ink);background:transparent;
+  border-radius:6px;padding:7px 14px;cursor:pointer;transition:background .15s ease,color .15s ease;
+}
+button.batch:hover{background:var(--teal-ink);color:var(--paper)}
+
+/* docket rows */
+.docket{border-top:1px solid var(--hairline)}
+.row{border-bottom:1px solid var(--hairline)}
+.row-line{
+  display:grid;grid-template-columns:26px 1fr auto;gap:var(--space-md);align-items:center;
+  padding:14px 4px;cursor:pointer;transition:background .12s ease;
+}
+.row-line:hover{background:var(--paper-tint)}
+.row.open .row-line{background:var(--paper-tint)}
+.row-line .glyph{color:var(--ink-faint)}
+.lane-red .row-line .glyph{color:var(--red)}
+.claim{font-size:.98rem;overflow-wrap:anywhere}
+.claim .s{font-weight:700;color:var(--navy)}
+.claim .k{font-family:var(--font-mono);font-size:.72rem;color:var(--teal-ink);padding:0 2px}
+.claim .o{color:var(--ink)}
+.row-side{display:flex;align-items:center;gap:12px}
+.votes{font-family:var(--font-mono);font-size:.74rem;color:var(--ink-faint);white-space:nowrap}
+.votes b{color:var(--green-ink);font-weight:500}
+.votes i{color:var(--red);font-style:normal}
+.chip{
+  font-family:var(--font-display);font-weight:600;font-size:.7rem;letter-spacing:.05em;
+  padding:3px 10px;border-radius:99px;white-space:nowrap;
+}
+.chip.approve{background:var(--green-tint);color:var(--green-ink)}
+.chip.edit{background:var(--paper-deep);color:var(--indigo)}
+.chip.reject{background:var(--red-tint);color:var(--red)}
+.chip.defer{background:var(--amber-tint);color:var(--amber)}
+.chip.pending{background:transparent;color:var(--ink-faint);border:1px dashed var(--hairline)}
+
+/* expanded evidence */
+.row-detail{display:grid;grid-template-rows:0fr;transition:grid-template-rows .35s cubic-bezier(.22,1,.36,1)}
+.row.open .row-detail{grid-template-rows:1fr}
+.row-detail>div{overflow:hidden}
+.detail-inner{padding:6px 4px var(--space-lg) 42px;display:grid;gap:var(--space-md)}
+@media (max-width:700px){.detail-inner{padding-left:4px}}
+.evidence{background:var(--paper-tint);border:1px solid var(--hairline);border-radius:10px;padding:var(--space-md)}
+.evidence-src{display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:.72rem;color:var(--ink-soft);margin-bottom:10px;flex-wrap:wrap}
+.evidence-src .anchor{color:var(--teal-ink)}
+.evidence blockquote{font-size:.92rem;color:var(--ink-soft);max-width:70ch}
+.evidence mark{background:oklch(0.9 0.07 187);color:var(--navy-deep);padding:1px 2px;border-radius:2px}
+.verdicts{display:grid;gap:6px}
+.verdict{display:flex;gap:10px;align-items:baseline;font-size:.85rem}
+.verdict .who{font-family:var(--font-mono);font-size:.7rem;white-space:nowrap;color:var(--ink-faint)}
+.verdict.corroborate .word{color:var(--green-ink);font-weight:700}
+.verdict.refute .word{color:var(--red);font-weight:700}
+.verdict .why{color:var(--ink-soft)}
+.actions{display:flex;gap:10px;flex-wrap:wrap}
+.actions button{
+  display:flex;align-items:center;gap:7px;
+  font-family:var(--font-display);font-weight:600;font-size:.84rem;
+  padding:8px 16px;border-radius:7px;cursor:pointer;border:1.5px solid transparent;
+  transition:transform .12s ease,background .12s ease;
+}
+.actions button:active{transform:scale(.97)}
+.actions .approve{background:var(--navy);color:var(--paper)}
+.actions .approve:hover{background:var(--navy-deep)}
+.actions .edit{border-color:var(--hairline);background:var(--paper);color:var(--indigo)}
+.actions .edit:hover{border-color:var(--indigo)}
+.actions .reject{border-color:var(--red-tint);background:var(--red-tint);color:var(--red)}
+.actions .defer{border-color:var(--hairline);background:var(--paper);color:var(--amber)}
+.edit-form{display:none;grid-template-columns:1fr;gap:8px;background:var(--paper-deep);border-radius:10px;padding:var(--space-md)}
+.edit-form.on{display:grid}
+.edit-form label{font-family:var(--font-mono);font-size:.68rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint)}
+.edit-form input{
+  font-family:var(--font-body);font-size:.9rem;padding:8px 10px;border-radius:6px;
+  border:1px solid var(--hairline);background:var(--paper);color:var(--ink);width:100%;
+}
+.edit-form input:focus{outline:2px solid var(--teal);outline-offset:1px;border-color:transparent}
+.edit-form .row2{display:flex;gap:10px;justify-content:flex-end;margin-top:4px}
+.edit-form .save{background:var(--teal-ink);color:var(--paper);border:none;border-radius:6px;padding:8px 16px;font-family:var(--font-display);font-weight:600;cursor:pointer}
+.edit-form .cancel{background:transparent;border:none;color:var(--ink-faint);cursor:pointer;font-size:.84rem}
+
+/* transparency ledger */
+.transparency{margin-top:var(--space-2xl);border-top:1px solid var(--hairline);padding-top:var(--space-lg)}
+.transparency h3{font-family:var(--font-display);font-size:1rem;color:var(--navy);display:flex;gap:10px;align-items:center}
+.transparency p.note{font-size:.85rem;color:var(--ink-faint);margin:6px 0 var(--space-md);max-width:60ch}
+.reject-row{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;padding:10px 0;border-bottom:1px solid var(--hairline);font-size:.85rem}
+.reject-row .who{font-family:var(--font-mono);font-size:.7rem;color:var(--ink-faint)}
+.reject-row .what{color:var(--ink-soft);text-decoration:line-through;text-decoration-color:oklch(0.6 0.1 22 / .6)}
+.reject-row .why{grid-column:2;font-size:.78rem;color:var(--red)}
+
+/* toast + empty */
+.toast{
+  position:fixed;bottom:24px;right:24px;background:var(--navy);color:var(--paper);
+  font-family:var(--font-display);font-size:.9rem;padding:12px 18px;border-radius:8px;
+  opacity:0;transform:translateY(8px);transition:opacity .25s ease,transform .25s ease;pointer-events:none;
+  box-shadow:0 8px 30px oklch(0.3 0.06 247 / .35);
+}
+.toast.on{opacity:1;transform:none}
+.empty{padding:var(--space-2xl) 0;text-align:left;max-width:52ch}
+.empty h3{font-family:var(--font-display);color:var(--navy);font-size:1.3rem;margin-bottom:10px}
+.empty p{color:var(--ink-soft);font-size:.95rem}
+.empty code{font-family:var(--font-mono);font-size:.8rem;background:var(--paper-tint);padding:2px 6px;border-radius:4px}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{transition-duration:.01ms!important;animation-duration:.01ms!important}
+}
+
+/* A visible focus ring. Ratification is a keyboard-driven review, and a
+   control you cannot see yourself on is one you can approve by accident. */
+#errorbar{background:#7f1d1d;color:#fee2e2;padding:.6rem 1rem;font-size:.9rem}
+a:focus-visible, button:focus-visible, [tabindex]:focus-visible, summary:focus-visible{
+  outline:3px solid #60a5fa; outline-offset:2px; border-radius:2px;
+}
+</style>
+</head>
+<body>
+<div id="errorbar" role="alert" hidden></div>
+<!-- icon sprite: hand-drawn 20px grid, 1.5px stroke -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-seal" viewBox="0 0 20 20"><circle cx="10" cy="8.5" r="5.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M7.6 8.6l1.7 1.7 3.2-3.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 13.2L5.6 17l2.6-1.1L10 17l1.8-1.1L14.4 17 13 13.2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></symbol>
+    <symbol id="i-scale" viewBox="0 0 20 20"><path d="M10 3v13M6.5 16h7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M10 4.5L4.8 6.2m5.2-1.7l5.2 1.7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M2.8 10.4a2 2 0 004 0zm9.4 0a2 2 0 004 0z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M4.8 6.4l-2 4m2-4l2 4m8.4-4l-2 4m2-4l2 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+    <symbol id="i-quote" viewBox="0 0 20 20"><path d="M4 12.5c0-3.6 1.8-6 4.5-7.3l.7 1.2C7.4 7.5 6.6 8.8 6.4 10c1.4 0 2.5 1 2.5 2.4A2.4 2.4 0 016.4 15 2.5 2.5 0 014 12.5zm7 0c0-3.6 1.8-6 4.5-7.3l.7 1.2c-1.8 1.1-2.6 2.4-2.8 3.6 1.4 0 2.5 1 2.5 2.4a2.4 2.4 0 01-2.5 2.6 2.5 2.5 0 01-2.4-2.5z" fill="currentColor"/></symbol>
+    <symbol id="i-doc-md" viewBox="0 0 20 20"><rect x="3.5" y="2.5" width="13" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 13V8l2 2.4L10.5 8v5m2.8-5v5m0 0l-1.6-1.7m1.6 1.7l1.6-1.7" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-doc-eml" viewBox="0 0 20 20"><rect x="2.5" y="4.5" width="15" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M3.5 6l6.5 5 6.5-5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-doc-pdf" viewBox="0 0 20 20"><path d="M5 2.5h6.5L16 7v8.5a2 2 0 01-2 2H5a2 2 0 01-2-2v-11a2 2 0 012-2z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M11.5 3v4H16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M6.2 14.2c1.8-.6 5-4.6 4.4-6.2-.2-.6-1-.6-1.2 0-.5 1.4 1.6 4.8 3.6 5.4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></symbol>
+    <symbol id="i-check" viewBox="0 0 20 20"><path d="M4 10.5l4 4L16.5 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-pen" viewBox="0 0 20 20"><path d="M12.8 3.8l3.4 3.4L7.5 16H4v-3.5zM11.4 5.2l3.4 3.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-x" viewBox="0 0 20 20"><path d="M5.5 5.5l9 9m0-9l-9 9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10 6v4.3l2.8 1.6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 20 20"><path d="M10 2.5l6 2.2v4.8c0 3.6-2.4 6.4-6 8-3.6-1.6-6-4.4-6-8V4.7z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M7.3 9.8l1.9 1.9 3.5-3.7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-fork" viewBox="0 0 20 20"><path d="M6 4.5v6a3.5 3.5 0 003.5 3.5h1A3.5 3.5 0 0014 10.5v-6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="6" cy="3.8" r="1.6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="14" cy="3.8" r="1.6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="10" cy="16.2" r="1.6" fill="none" stroke="currentColor" stroke-width="1.4"/></symbol>
+    <symbol id="i-firewall" viewBox="0 0 20 20"><path d="M3 5.5h14M3 9.5h14M3 13.5h14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M7 5.5v4m6-4v4m-3 4v4M3 17.5h14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+  </defs>
+</svg>
+
+<div class="shell">
+  <aside class="rail">
+    <div class="wordmark">
+      <svg width="40" height="40" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="oklch(0.26 0.06 247)"/><circle cx="16" cy="14" r="7.5" fill="none" stroke="oklch(0.83 0.09 187)" stroke-width="2"/><path d="M12.5 14.2l2.4 2.4 4.6-4.8" fill="none" stroke="oklch(0.83 0.09 187)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M11 23h10" stroke="oklch(0.83 0.09 187)" stroke-width="2" stroke-linecap="round"/><path d="M13 26h6" stroke="oklch(0.83 0.09 187)" stroke-width="2" stroke-linecap="round" opacity=".55"/></svg>
+      <h1>Ratification Bench<small>smesh world model</small></h1>
+    </div>
+
+    <dl class="kv">
+      <dt>Base revision</dt><dd id="base-rev">—</dd>
+      <dt>Reviewer</dt><dd id="reviewer">—</dd>
+      <dt>Signing key</dt><dd id="vkey" style="font-size:.65rem">—</dd>
+    </dl>
+
+    <div class="progress-block">
+      <h2>Coverage</h2>
+      <div class="meter"><i id="meter" style="width:0%"></i></div>
+      <div class="meter-label"><span id="decided">0</span> of <span id="total">0</span> candidates decided</div>
+      <div class="lane-tally">
+        <span><span class="dot red"></span><span id="tally-red">0</span> red</span>
+        <span><span class="dot amber"></span><span id="tally-amber">0</span> amber</span>
+        <span><span class="dot green"></span><span id="tally-green">0</span> green</span>
+      </div>
+    </div>
+
+    <div class="sign-block" id="sign-block">
+      <p>Ratification is total: every candidate carries your decision before the changeset can be signed into a revision.</p>
+      <button class="sign" id="sign-btn" disabled>
+        <svg width="20" height="20"><use href="#i-seal"/></svg>
+        Ratify &amp; sign revision
+      </button>
+    </div>
+  </aside>
+
+  <main class="bench">
+    <header class="bench-head">
+      <span class="eyebrow">staged changeset · human review</span>
+      <h2>The mesh proposes. You dispose.</h2>
+      <p>Every candidate below was extracted from your corpus, grounded to a verbatim quote, and cross-examined by a second model family. Nothing becomes part of the signed world without your judgment.</p>
+    </header>
+    <div id="lanes"></div>
+    <div id="transparency"></div>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const LANES = [
+  {id:"Red",   icon:"i-scale",  title:"Requires your judgment",
+   note:"Contested: live evidence on both sides. The mesh does not resolve these — you do."},
+  {id:"Amber", icon:"i-shield", title:"Review individually",
+   note:"Normative or single-corroborator claims. Read the evidence before approving."},
+  {id:"Green", icon:"i-check",  title:"Batch — spot-check",
+   note:"High-consensus, exact-quote, low-risk. One gesture approves the lane; expand any row to verify."},
+];
+const DOC_ICON = n => n.endsWith(".pdf") ? "i-doc-pdf" : n.endsWith(".eml") ? "i-doc-eml" : "i-doc-md";
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+let STATE = null;
+const open = new Set();
+
+function showError(msg){
+  const bar = document.getElementById("errorbar");
+  if(!bar) return;
+  bar.textContent = msg;
+  bar.hidden = false;
+}
+
+async function load(){
+  // A failed fetch used to reject silently and leave the last render on
+  // screen, so a reviewer could go on approving against state the server had
+  // already moved past. Say so instead.
+  try {
+    const res = await fetch("/api/state");
+    if(!res.ok) throw new Error(`server returned ${res.status}`);
+    STATE = await res.json();
+    const bar = document.getElementById("errorbar");
+    if(bar) bar.hidden = true;
+    render();
+  } catch (e) {
+    showError(`Could not load the review session: ${e.message}. What you see may be out of date.`);
+  }
+}
+
+function decisionChip(d){
+  if(!d) return `<span class="chip pending">undecided</span>`;
+  if(d === "Approve" || d.Approve !== undefined) return `<span class="chip approve">approved</span>`;
+  if(d === "Defer" || d.Defer !== undefined) return `<span class="chip defer">deferred</span>`;
+  if(d.Reject) return `<span class="chip reject">rejected</span>`;
+  if(d.Edit) return `<span class="chip edit">amended</span>`;
+  return `<span class="chip pending">undecided</span>`;
+}
+
+function evidenceHtml(ev){
+  const ctx = esc(ev.context);
+  const q = esc(ev.quote);
+  // String.replace expands $& $` $' and $1 in the replacement, so a quote
+  // containing a dollar sign is rendered as something the document does not
+  // say. This is the text a reviewer reads before approving, so a mangled
+  // quote means approving something they were never shown. Splice by index
+  // instead, and only mark the first occurrence.
+  const at = ctx.indexOf(q);
+  const marked = at === -1
+    ? `${ctx}<br><mark>${q}</mark>`
+    : ctx.slice(0, at) + `<mark>${q}</mark>` + ctx.slice(at + q.length);
+  return `<div class="evidence">
+    <div class="evidence-src">
+      <svg width="16" height="16"><use href="#${DOC_ICON(ev.doc_name)}"/></svg>
+      <span>${esc(ev.doc_name)}</span><span>·</span><span class="anchor">${esc(ev.anchor)}</span>
+    </div>
+    <blockquote>…${marked}…</blockquote>
+  </div>`;
+}
+
+function rowHtml(c){
+  const d = c.decision;
+  const detailId = `d-${btoa(unescape(encodeURIComponent(c.key))).replace(/[^a-zA-Z0-9]/g,"")}`;
+  return `<div class="row ${open.has(c.key) ? "open" : ""}" data-key="${esc(c.key)}">
+    <div class="row-line" role="button" aria-expanded="${open.has(c.key)}" aria-controls="${detailId}" tabindex="0">
+      <svg class="glyph" width="18" height="18"><use href="#${c.lane === "Red" ? "i-fork" : "i-quote"}"/></svg>
+      <div class="claim"><span class="s">${esc(c.subject)}</span> <span class="k">—[${esc(c.kind)}]→</span> <span class="o">${esc(c.object)}</span></div>
+      <div class="row-side">
+        <span class="votes"><b>+${c.corroborations}</b>/<i>−${c.refutations}</i></span>
+        ${decisionChip(d)}
+      </div>
+    </div>
+    <div class="row-detail" id="${detailId}"><div><div class="detail-inner">
+      ${c.evidence.map(evidenceHtml).join("")}
+      <div class="verdicts">${c.verdicts.map(v => `
+        <div class="verdict ${v.judgment.toLowerCase()}">
+          <span class="who">${esc(v.by)}</span>
+          <span class="word">${v.judgment === "Corroborate" ? "corroborates" : "refutes"}</span>
+          <span class="why">${esc(v.rationale)}</span>
+        </div>`).join("")}
+      </div>
+      <div class="actions">
+        <button class="approve" data-act="approve"><svg width="16" height="16"><use href="#i-check"/></svg>Approve</button>
+        <button class="edit" data-act="show-edit"><svg width="16" height="16"><use href="#i-pen"/></svg>Amend</button>
+        <button class="reject" data-act="reject"><svg width="16" height="16"><use href="#i-x"/></svg>Reject</button>
+        <button class="defer" data-act="defer"><svg width="16" height="16"><use href="#i-clock"/></svg>Defer for evidence</button>
+      </div>
+      <form class="edit-form" data-key="${esc(c.key)}">
+        <label>Subject <input name="subject" value="${esc(c.subject)}"></label>
+        <label>Kind <input name="kind" value="${esc(c.kind)}"></label>
+        <label>Object <input name="object" value="${esc(c.object)}"></label>
+        <div class="row2">
+          <button type="button" class="cancel">Cancel</button>
+          <button type="submit" class="save">Save amendment — your version wins</button>
+        </div>
+      </form>
+    </div></div></div>
+  </div>`;
+}
+
+function render(){
+  const s = STATE;
+  document.getElementById("base-rev").textContent = s.base_rev;
+  document.getElementById("reviewer").textContent = s.reviewer;
+  document.getElementById("vkey").textContent = s.verifying_key.slice(0,16) + "…" + s.verifying_key.slice(-8);
+  const p = s.progress;
+  document.getElementById("meter").style.width = p.total ? (100 * p.decided / p.total) + "%" : "0%";
+  document.getElementById("decided").textContent = p.decided;
+  document.getElementById("total").textContent = p.total;
+  document.getElementById("tally-red").textContent = p.red;
+  document.getElementById("tally-amber").textContent = p.amber;
+  document.getElementById("tally-green").textContent = p.green;
+
+  const lanesEl = document.getElementById("lanes");
+  if(!s.candidates.length){
+    lanesEl.innerHTML = `<div class="empty">
+      <h3>No staged changeset yet</h3>
+      <p>Run the refinery to produce one: <code>cargo run -p smesh-refinery</code> writes
+      <code>refinery-staged.json</code>, then start this bench pointed at it.</p></div>`;
+  } else {
+    lanesEl.innerHTML = LANES.map(lane => {
+      const rows = s.candidates.filter(c => c.lane === lane.id);
+      if(!rows.length) return "";
+      const batch = lane.id === "Green" && !s.signed
+        ? `<button class="batch" id="batch-green">Approve remaining ${rows.filter(c => !c.decision).length} green</button>` : "";
+      return `<section class="lane lane-${lane.id.toLowerCase()}">
+        <div class="lane-head">
+          <svg width="20" height="20" style="color:${lane.id === "Red" ? "var(--red)" : lane.id === "Amber" ? "var(--amber)" : "var(--green-ink)"}"><use href="#${lane.icon}"/></svg>
+          <h3>${lane.title}</h3><span class="count">${rows.length}</span>${batch}
+          <span class="note">${lane.note}</span>
+        </div>
+        <div class="docket">${rows.map(rowHtml).join("")}</div>
+      </section>`;
+    }).join("");
+  }
+
+  const t = document.getElementById("transparency");
+  const rejected = s.rejected || [];
+  t.innerHTML = `<div class="transparency">
+    <h3><svg width="18" height="18"><use href="#i-firewall"/></svg>Confabulation firewall — ${rejected.length} emission${rejected.length === 1 ? "" : "s"} refused</h3>
+    <p class="note">Extractor claims whose quotes were not found verbatim in any document. Shown for transparency; they never reached this bench as candidates.</p>
+    ${rejected.map(r => `<div class="reject-row"><span class="who">${esc(r.role)}</span><span class="what">${esc(r.summary)}</span><span class="why">${esc(r.reason)}</span></div>`).join("") || `<p class="note">Nothing refused this run — every emission grounded.</p>`}
+  </div>`;
+
+  const signBtn = document.getElementById("sign-btn");
+  const signBlock = document.getElementById("sign-block");
+  if(s.signed){
+    signBlock.innerHTML = `<div class="receipt">
+      <h3><svg width="18" height="18"><use href="#i-seal"/></svg>Revision signed</h3>
+      <code>${esc(s.signed.new_rev)}</code>
+      <div class="meta">${s.signed.edges} edges · ratified by ${esc(s.signed.reviewer)} · from ${esc(s.signed.base_rev)}</div>
+    </div>`;
+  } else {
+    signBtn.disabled = p.decided < p.total || p.total === 0;
+  }
+  wire();
+}
+
+function toast(msg){
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.classList.add("on");
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove("on"), 2600);
+}
+
+async function decide(key, body){
+  const res = await fetch("/api/decision", {method:"POST", headers:{"content-type":"application/json"},
+    body: JSON.stringify({key, ...body})});
+  if(!res.ok){ toast(await res.text()); return; }
+  await load();
+}
+
+function wire(){
+  document.querySelectorAll(".row-line").forEach(line => {
+    const key = line.parentElement.dataset.key;
+    const toggle = () => { open.has(key) ? open.delete(key) : open.add(key); render(); };
+    line.onclick = toggle;
+    line.onkeydown = e => { if(e.key === "Enter" || e.key === " "){ e.preventDefault(); toggle(); } };
+  });
+  document.querySelectorAll(".actions button").forEach(btn => {
+    btn.onclick = e => {
+      e.stopPropagation();
+      const row = btn.closest(".row");
+      const key = row.dataset.key;
+      const act = btn.dataset.act;
+      if(act === "show-edit"){ row.querySelector(".edit-form").classList.toggle("on"); return; }
+      if(act === "reject"){
+        const reason = prompt("Reason for rejection (recorded, feeds expert reputation):", "");
+        if(reason === null) return;
+        decide(key, {action:"reject", reason});
+        return;
+      }
+      decide(key, {action:act});
+    };
+  });
+  document.querySelectorAll(".edit-form").forEach(f => {
+    f.onsubmit = e => {
+      e.preventDefault();
+      decide(f.dataset.key, {action:"edit",
+        subject: f.subject.value, kind: f.kind.value, object: f.object.value});
+    };
+    f.querySelector(".cancel").onclick = () => f.classList.remove("on");
+  });
+  const batch = document.getElementById("batch-green");
+  if(batch) batch.onclick = async () => {
+    // A failure here silently did nothing, and the reload made it look like a
+    // deliberate no-op. Bulk approval is exactly the action a reviewer must not
+    // be wrong about having taken.
+    const res = await fetch("/api/approve-green", {method:"POST"});
+    if(res.ok){
+      const j = await res.json();
+      toast(`${j.approved} green candidates approved`);
+    } else {
+      showError(`Bulk approval failed (${res.status}). Nothing was approved.`);
+    }
+    await load();
+  };
+  const signBtn = document.getElementById("sign-btn");
+  if(signBtn) signBtn.onclick = async () => {
+    const res = await fetch("/api/ratify", {method:"POST"});
+    if(!res.ok){ toast(await res.text()); return; }
+    const j = await res.json();
+    toast(`Signed: revision ${j.new_rev.slice(0,12)}…`);
+    await load();
+  };
+}
+
+load();
+</script>
+</body>
+</html>

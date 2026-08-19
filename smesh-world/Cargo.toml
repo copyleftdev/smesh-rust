@@ -1,0 +1,16 @@
+[package]
+name = "smesh-world"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Signed organizational world models: expert roster, CDM, delta lifecycle, Meridian benchmark"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+blake3 = { workspace = true }
+lopdf = { workspace = true }
+pdf-extract = { workspace = true }
