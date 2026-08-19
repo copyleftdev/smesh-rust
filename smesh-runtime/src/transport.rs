@@ -150,15 +150,28 @@ impl PeerCandidates {
     ///
     /// Observed comes first: if the two differ, the peer is behind something
     /// translating its address, and the local one will not work from here.
+    ///
+    /// Unspecified addresses are dropped. A node that binds `0.0.0.0` reports
+    /// exactly that as the address it listens on, and it is meaningless to
+    /// anyone else — dialling it wastes a full connect timeout on an address
+    /// that cannot answer. Found by watching a real NAT traversal try it.
     pub fn dial_order(&self) -> Vec<SocketAddr> {
         let mut order = Vec::with_capacity(2);
-        if let Some(observed) = self.observed_addr {
-            order.push(observed);
-        }
-        if !order.contains(&self.local_addr) {
-            order.push(self.local_addr);
+        for addr in [self.observed_addr, Some(self.local_addr)]
+            .into_iter()
+            .flatten()
+        {
+            if addr.ip().is_unspecified() || order.contains(&addr) {
+                continue;
+            }
+            order.push(addr);
         }
         order
+    }
+
+    /// Whether any of these addresses could actually be dialled.
+    pub fn is_reachable(&self) -> bool {
+        !self.dial_order().is_empty()
     }
 }
 
@@ -811,6 +824,30 @@ mod tests {
                 "203.0.113.7:54321".parse().unwrap(),
                 "192.168.1.20:9000".parse().unwrap(),
             ]
+        );
+    }
+
+    #[test]
+    fn a_wildcard_bind_is_not_a_candidate() {
+        // `0.0.0.0` is what a node bound to every interface reports, and it is
+        // not an address anyone can reach it on.
+        let wildcard = PeerCandidates {
+            node_id: "b".into(),
+            local_addr: "0.0.0.0:9402".parse().unwrap(),
+            observed_addr: None,
+        };
+        assert!(wildcard.dial_order().is_empty());
+        assert!(!wildcard.is_reachable());
+
+        let discovered = PeerCandidates {
+            node_id: "b".into(),
+            local_addr: "0.0.0.0:9402".parse().unwrap(),
+            observed_addr: Some("203.0.113.7:9402".parse().unwrap()),
+        };
+        assert_eq!(
+            discovered.dial_order(),
+            vec!["203.0.113.7:9402".parse::<SocketAddr>().unwrap()],
+            "only the address the network reported is usable"
         );
     }
 

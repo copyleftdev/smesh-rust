@@ -50,6 +50,16 @@ const RECONNECT_BASE: Duration = Duration::from_millis(500);
 const RECONNECT_MAX: Duration = Duration::from_secs(30);
 /// How often the supervisor wakes to consider reconnecting.
 const RECONNECT_TICK: Duration = Duration::from_millis(500);
+/// Poll interval while waiting to learn our own address.
+const REFLEXIVE_TICK: Duration = Duration::from_millis(100);
+/// How many of those to wait before giving up and using what we have.
+const REFLEXIVE_TICKS_MAX: u32 = 30;
+/// How many simultaneous-open attempts before giving up on a peer.
+const PUNCH_ROUNDS: u32 = 4;
+/// How many times the punched-at side tries back.
+const PUNCH_REPLY_ROUNDS: u32 = 3;
+/// Alias kept short at the call site.
+const REFLEXIVE_WAIT_TICKS: u32 = REFLEXIVE_TICKS_MAX;
 
 /// Configuration for joining a mesh.
 #[derive(Debug, Clone)]
@@ -504,13 +514,22 @@ async fn inbound_loop(
                     .await;
             }
 
-            TransportMessage::PeerResponse { peers } => on_peer_response(&ctx, peers).await,
-
-            TransportMessage::PunchRequest { target, candidates } => {
-                on_punch_request(&ctx, &target, candidates).await
+            // Dialling can block for the whole connect timeout, and this loop
+            // is the only thing draining the socket. Handling these inline let
+            // one unreachable peer stall every other message — including the
+            // reply that carries our own address, which the punch then went
+            // out without.
+            TransportMessage::PeerResponse { peers } => {
+                tokio::spawn(async move { on_peer_response(&ctx, peers).await });
             }
 
-            TransportMessage::PunchNow { candidates } => on_punch_now(&ctx, candidates).await,
+            TransportMessage::PunchRequest { target, candidates } => {
+                tokio::spawn(async move { on_punch_request(&ctx, &target, candidates).await });
+            }
+
+            TransportMessage::PunchNow { candidates } => {
+                tokio::spawn(async move { on_punch_now(&ctx, candidates).await });
+            }
 
             TransportMessage::Ping { timestamp } => {
                 let _ = ctx
@@ -692,7 +711,7 @@ async fn on_peer_response(ctx: &MeshCtx, peers: Vec<PeerCandidates>) {
         if !dial_candidates(ctx, &candidate).await {
             // Nothing answered. If it is behind NAT the only way in is for both
             // of us to dial at once, arranged by someone we can both reach.
-            request_punch(ctx, &candidate.node_id).await;
+            punch_toward(ctx, &candidate).await;
         }
     }
 }
@@ -749,11 +768,68 @@ async fn on_punch_now(ctx: &MeshCtx, candidates: PeerCandidates) {
         }),
     );
 
-    let punched = dial_candidates(ctx, &candidates).await;
+    // Dial straight away: the requester is dialling us at this moment, and the
+    // overlap is the whole point. Retry a couple of times in case the first
+    // pass lands either side of their attempt.
+    let mut punched = false;
+    for round in 1..=PUNCH_REPLY_ROUNDS {
+        if dial_candidates(ctx, &candidates).await {
+            punched = true;
+            break;
+        }
+        if ctx.peers.get_peer(&candidates.node_id).await.is_some() {
+            punched = true;
+            break;
+        }
+        debug!("punch round {} toward {} missed", round, candidates.node_id);
+    }
+
     ctx.journal.record(
         "punch_result",
         json!({ "peer": candidates.node_id, "connected": punched }),
     );
+}
+
+/// Punch toward a peer: ask for the introduction and dial at the same moment.
+///
+/// The requester has to dial too, and dial *now*. Asking a relay to tell the
+/// other side to dial, and waiting to be dialled, is not a simultaneous open —
+/// the two attempts end up a full connect timeout apart and never overlap, so
+/// each one dies against a NAT that has no mapping yet. Both sides sending at
+/// once is the entire mechanism.
+///
+/// Repeated a few times because one pass can still miss: the relay adds a round
+/// trip, and either side may be mid-timeout when the other starts.
+async fn punch_toward(ctx: &MeshCtx, candidate: &PeerCandidates) -> bool {
+    // A long connect timeout is wrong here: attempts must be short enough that
+    // both sides are trying at overlapping moments rather than one sitting in a
+    // timeout while the other gives up.
+    for round in 1..=PUNCH_ROUNDS {
+        if ctx.peers.get_peer(&candidate.node_id).await.is_some() {
+            return true;
+        }
+
+        ctx.journal.record(
+            "punch_round",
+            json!({ "peer": candidate.node_id, "round": round }),
+        );
+
+        // Ask the other side to start, then start ourselves without waiting.
+        request_punch(ctx, &candidate.node_id).await;
+        if dial_candidates(ctx, candidate).await {
+            ctx.journal.record(
+                "punch_succeeded",
+                json!({ "peer": candidate.node_id, "round": round }),
+            );
+            return true;
+        }
+    }
+
+    ctx.journal.record(
+        "punch_exhausted",
+        json!({ "peer": candidate.node_id, "rounds": PUNCH_ROUNDS }),
+    );
+    false
 }
 
 /// Ask every peer we can already reach to introduce us to `target`.
@@ -761,7 +837,29 @@ async fn on_punch_now(ctx: &MeshCtx, candidates: PeerCandidates) {
 /// Used when a peer is known but none of its addresses answer, which is what
 /// being behind NAT looks like from the outside.
 async fn request_punch(ctx: &MeshCtx, target: &str) {
-    let mine = own_candidates(ctx).await;
+    // Asking to be punched to before we know our own public address advertises
+    // only the address we bound, which behind NAT is useless — the other side
+    // receives an instruction it cannot act on. Our address arrives from a peer
+    // shortly after connecting, so wait briefly rather than wasting the round.
+    let mine = match await_reflexive(ctx).await {
+        Some(_) => own_candidates(ctx).await,
+        None => {
+            let mine = own_candidates(ctx).await;
+            if !mine.is_reachable() {
+                debug!(
+                    "not requesting a punch to {}: we have no address to offer yet",
+                    target
+                );
+                ctx.journal.record(
+                    "punch_skipped",
+                    json!({ "target": target, "reason": "own address not yet known" }),
+                );
+                return;
+            }
+            mine
+        }
+    };
+
     let relays = ctx.transport.connected_addrs().await;
 
     if relays.is_empty() {
@@ -787,6 +885,21 @@ async fn request_punch(ctx: &MeshCtx, target: &str) {
     }
 }
 
+/// Wait a short while for a peer to tell us our own address.
+///
+/// It arrives unprompted just after the first handshake, so this is a brief
+/// wait for something already in flight rather than a poll for something that
+/// may never come.
+async fn await_reflexive(ctx: &MeshCtx) -> Option<SocketAddr> {
+    for _ in 0..REFLEXIVE_WAIT_TICKS {
+        if let Some(addr) = *ctx.reflexive_addr.read().await {
+            return Some(addr);
+        }
+        tokio::time::sleep(REFLEXIVE_TICK).await;
+    }
+    *ctx.reflexive_addr.read().await
+}
+
 /// The connection address we currently hold for a named peer.
 async fn connection_addr_for(ctx: &MeshCtx, node_id: &str) -> Option<SocketAddr> {
     let live: HashSet<SocketAddr> = ctx.transport.connected_addrs().await.into_iter().collect();
@@ -804,6 +917,14 @@ async fn connection_addr_for(ctx: &MeshCtx, node_id: &str) -> Option<SocketAddr>
 /// Returns whether any of them worked. A peer that answers on none of its
 /// candidates is behind something that needs both sides to move at once.
 async fn dial_candidates(ctx: &MeshCtx, candidate: &PeerCandidates) -> bool {
+    if !candidate.is_reachable() {
+        debug!(
+            "{} has no usable address yet (local {} is not routable)",
+            candidate.node_id, candidate.local_addr
+        );
+        return false;
+    }
+
     for addr in candidate.dial_order() {
         if addr == ctx.listen_addr {
             continue;

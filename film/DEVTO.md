@@ -248,11 +248,45 @@ Two peers reporting *different* addresses for you means the translator allocates
 
 The remaining case is two nodes both behind NAT, which needs a simultaneous open coordinated by someone they can both already reach. That is implemented and the coordination path is tested end to end.
 
-**I have not run it against a real address translator.** Verifying that properly needs network namespaces and firewall rules on the host, which was out of bounds here. So: expect it to work for full-cone and restricted-cone NATs, expect it to fail for symmetric ones, and treat both as untested claims. It is marked that way in the source too, because an untested code path that looks finished is how the QUIC transport got into the state this whole post is about.
+So I put it on three cloud hosts in three regions — two of them inside network namespaces behind real `MASQUERADE` NATs, and a public rendezvous — and watched what happened. It found three bugs.
+
+**We advertised `0.0.0.0`.** A node bound to every interface reports exactly that as the address it listens on, and it was going out as a candidate. The other side dutifully tried to dial it and burned a connect timeout on an address that cannot answer.
+
+**One slow dial stalled every other message.** The inbound loop handled discovery inline, so a five-second connect attempt blocked the socket reader — including the reply carrying our own public address. The result was a node asking to be punched to *before it knew where it was*, advertising the useless address above. The logs are unambiguous:
+
+```
+05:41:11.955  trying left at 138.197.31.115:9401
+05:41:16.957  learned our address is 147.182.229.187:9402   <- five seconds later
+```
+
+**The simultaneous open was not simultaneous.** The requester dialled, failed, *then* asked the relay to tell the other side to dial. The two attempts ended up a full timeout apart and never overlapped — which is the entire mechanism. Both sides now dial at once, repeatedly.
+
+Then the interesting part. With all three fixed, both ends were dialling each other's correct public addresses in the same window, and it still did not connect. The packet capture said why:
+
+```
+left -> rendezvous  :  138.197.31.115:9401
+left -> right       :  138.197.31.115:50343
+```
+
+A different external port per destination. That is symmetric NAT, and no amount of address sharing survives it: right was told to expect `:9401` and left arrives from `:50343`, so both directions get dropped. Hole punching cannot work through it, which is exactly what the code already said it could not do — now measured rather than assumed.
+
+## The part that made it not matter
+
+Here is the thing I would have missed by reasoning instead of testing. A signal emitted by the node behind the New York NAT arrived at the node behind the San Francisco NAT:
+
+```
+[recv] 155ad5b1e52d48b6ba93daf18fdb501b from rendezvous (hop 1)
+```
+
+Hop one. Relayed through a peer both of them could reach.
+
+The mesh never needed the direct connection. Relaying through intermediate peers is what a gossip protocol does anyway, so two nodes that cannot possibly connect to each other still coordinate. Hole punching is an optimisation that saves a hop; it is not a prerequisite for participation.
+
+That reframes the whole NAT question. The thing worth engineering was never traversal. It was making sure a node with nothing but outbound connectivity is a full participant — and it already was.
 
 ## What is still wrong
 
-- **NAT traversal is unverified**, as above.
+- **Hole punching works for cone NATs and not symmetric ones.** The cone case is still untested; the symmetric failure is measured. Nodes behind symmetric NAT fall back to relaying, which costs a hop and a little latency.
 - **The telemetry in the demo is synthetic.** Deliberately: a seeded fixture means the run reproduces byte-for-byte on any machine, which is what makes a visualisation worth trusting. The coordination is not synthetic — real processes, real sockets, probabilistic relay.
 - **Trust on first use is not identity.** There is no key distribution and no revocation. A node that generates its own name rather than deriving it from its key is only as trustworthy as whoever it met first.
 - **The recording predates the signing work.** The run in the video was captured before attestations were signatures, so what you are watching is the mechanism, not the hardened version of it.
