@@ -67,3 +67,9 @@ smesh-demo.mp4
 # Recorded mesh runs (journals + merged timelines)
 runs/
 
+
+# Rendered film output (large, regenerable)
+film/out/
+film/src/audio/
+film/src/frames/
+film/src/node_modules/

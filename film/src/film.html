@@ -1,0 +1,56 @@
+<title>SMESH film</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap">
+<style>
+  html, body { margin: 0; padding: 0; background: #000; overflow: hidden; }
+  canvas { display: block; }
+</style>
+<canvas id="c" width="1920" height="1080"></canvas>
+<script>const SCENES = {};</script>
+<script src="lib.js"></script>
+<script src="scenes1.js"></script>
+<script src="scenes2.js"></script>
+<script src="scenes3.js"></script>
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  let TIMELINE = null;
+
+  window.loadTimeline = (json) => {
+    TIMELINE = json;
+    for (const s of TIMELINE.segments) s.dur = s.total_ms / 1000;
+  };
+
+  /** Render the frame at an absolute time. Pure: same input, same pixels. */
+  window.renderAt = (ms) => {
+    const seg = TIMELINE.segments.find(s => ms >= s.start_ms && ms < s.end_ms)
+      || TIMELINE.segments[TIMELINE.segments.length - 1];
+    const local = (ms - seg.start_ms) / 1000;
+    const frame = Math.round(ms / (1000 / TIMELINE.fps));
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, 1920, 1080);
+
+    const draw = SCENES[seg.scene];
+    if (draw) {
+      draw(ctx, local, seg, frame);
+    } else {
+      // Segments rendered in the other capture pass leave black here.
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, 1920, 1080);
+    }
+    return seg.scene;
+  };
+
+  window.filmReady = async () => {
+    await document.fonts.ready;
+    // Warm the faces so the first captured frame is not a fallback.
+    ctx.font = '700 100px Archivo, sans-serif'; ctx.measureText('SMESH');
+    ctx.font = '400 20px "IBM Plex Mono", monospace'; ctx.measureText('0123');
+    await document.fonts.ready;
+    return true;
+  };
+})();
+</script>
