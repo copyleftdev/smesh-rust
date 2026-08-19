@@ -62,8 +62,21 @@ pub enum TransportMessage {
         /// key and have its attestations counted.
         #[serde(default)]
         public_key: String,
-        /// Address the sender accepts connections on
+        /// Address the sender accepts connections on.
+        ///
+        /// This is what the sender bound locally, so behind NAT it is a private
+        /// address that nobody outside can reach. It is still worth carrying:
+        /// on a LAN or the same host it is the direct route.
         listen_addr: SocketAddr,
+
+        /// Where the receiver sees the sender's packets coming from.
+        ///
+        /// Set when replying to a `Hello`. This is the sender's address as the
+        /// rest of the world sees it — its NAT mapping — and is the only
+        /// candidate a third party has any chance of reaching. A node learns
+        /// its own public address this way, the same trick STUN uses.
+        #[serde(default)]
+        observed_addr: Option<SocketAddr>,
     },
 
     /// A SMESH signal to propagate
@@ -86,8 +99,28 @@ pub enum TransportMessage {
 
     /// Peer discovery response
     PeerResponse {
-        /// Known peer addresses
-        peers: Vec<(String, SocketAddr)>,
+        /// Known peers and every address worth trying for each.
+        peers: Vec<PeerCandidates>,
+    },
+
+    /// Ask a mutually-reachable peer to arrange a simultaneous open.
+    ///
+    /// Two nodes that are both behind NAT cannot dial each other: whoever
+    /// connects first is dropped by the other's NAT because no mapping exists
+    /// yet. If both send at the same moment, each outbound packet opens the
+    /// mapping the other one needs. That has to be coordinated by somebody both
+    /// can already reach.
+    PunchRequest {
+        /// Who the requester wants to reach.
+        target: String,
+        /// Where the requester can be tried.
+        candidates: PeerCandidates,
+    },
+
+    /// Relayed instruction to start punching toward a peer, now.
+    PunchNow {
+        /// Where to aim.
+        candidates: PeerCandidates,
     },
 
     /// Heartbeat/keepalive
@@ -95,6 +128,38 @@ pub enum TransportMessage {
 
     /// Heartbeat response
     Pong { timestamp: u64 },
+}
+
+/// Everywhere one peer might be reachable.
+///
+/// Modelled on ICE's candidate list, cut down to the two that matter here: the
+/// address a peer believes it has, and the address the network says it has.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeerCandidates {
+    /// Which node these addresses belong to.
+    pub node_id: String,
+    /// The address the peer bound locally.
+    pub local_addr: SocketAddr,
+    /// The address its traffic was observed arriving from, if known.
+    #[serde(default)]
+    pub observed_addr: Option<SocketAddr>,
+}
+
+impl PeerCandidates {
+    /// Addresses to try, best first, without duplicates.
+    ///
+    /// Observed comes first: if the two differ, the peer is behind something
+    /// translating its address, and the local one will not work from here.
+    pub fn dial_order(&self) -> Vec<SocketAddr> {
+        let mut order = Vec::with_capacity(2);
+        if let Some(observed) = self.observed_addr {
+            order.push(observed);
+        }
+        if !order.contains(&self.local_addr) {
+            order.push(self.local_addr);
+        }
+        order
+    }
 }
 
 impl TransportMessage {
@@ -731,6 +796,46 @@ mod tests {
     use smesh_core::NodeIdentity;
 
     #[test]
+    fn candidates_prefer_the_address_the_network_reports() {
+        // Behind NAT the local address is unreachable from outside, so the
+        // observed one has to be tried first or discovery wastes a timeout on
+        // an address that can never answer.
+        let behind_nat = PeerCandidates {
+            node_id: "b".into(),
+            local_addr: "192.168.1.20:9000".parse().unwrap(),
+            observed_addr: Some("203.0.113.7:54321".parse().unwrap()),
+        };
+        assert_eq!(
+            behind_nat.dial_order(),
+            vec![
+                "203.0.113.7:54321".parse().unwrap(),
+                "192.168.1.20:9000".parse().unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_undiscovered_peer_still_offers_its_local_address() {
+        let plain = PeerCandidates {
+            node_id: "a".into(),
+            local_addr: "127.0.0.1:9000".parse().unwrap(),
+            observed_addr: None,
+        };
+        assert_eq!(plain.dial_order(), vec!["127.0.0.1:9000".parse().unwrap()]);
+    }
+
+    #[test]
+    fn an_unnatted_peer_is_not_dialled_twice() {
+        let same: SocketAddr = "127.0.0.1:9000".parse().unwrap();
+        let direct = PeerCandidates {
+            node_id: "a".into(),
+            local_addr: same,
+            observed_addr: Some(same),
+        };
+        assert_eq!(direct.dial_order(), vec![same]);
+    }
+
+    #[test]
     fn test_transport_config() {
         let config = TransportConfig::default();
         assert_eq!(config.max_message_size, 1024 * 1024);
@@ -780,6 +885,7 @@ mod tests {
             node_id: "node-a".to_string(),
             public_key: "aa".repeat(32),
             listen_addr: "127.0.0.1:9001".parse().unwrap(),
+            observed_addr: Some("203.0.113.7:54321".parse().unwrap()),
         };
 
         let bytes = bincode::serialize(&msg).unwrap();
@@ -788,10 +894,12 @@ mod tests {
                 node_id,
                 public_key,
                 listen_addr,
+                observed_addr,
             } => {
                 assert_eq!(node_id, "node-a");
                 assert_eq!(public_key, "aa".repeat(32));
                 assert_eq!(listen_addr.port(), 9001);
+                assert_eq!(observed_addr.unwrap().port(), 54321);
             }
             _ => panic!("Wrong message type"),
         }

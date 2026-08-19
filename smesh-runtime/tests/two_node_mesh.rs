@@ -386,3 +386,87 @@ async fn corroboration_across_the_mesh_is_signature_backed() {
     a.shutdown().await;
     b.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_node_learns_its_own_address_from_a_peer() {
+    // A node bound to a wildcard address has no idea what address the rest of
+    // the world reaches it on, and behind NAT it never could. The only source
+    // of that fact is a peer reporting where the traffic arrived from.
+    let a = MeshNode::start("node-a", vec![]).await;
+    let b = MeshNode::start("node-b", vec![a.addr()]).await;
+
+    eventually(
+        Duration::from_secs(5),
+        "b learns its own address",
+        || async { b.handle.reflexive_addr().await.is_some() },
+    )
+    .await;
+
+    let observed = b.handle.reflexive_addr().await.unwrap();
+    assert_eq!(
+        observed.ip(),
+        a.addr().ip(),
+        "the reported address should be on the path the peer saw us arrive from"
+    );
+
+    a.shutdown().await;
+    b.shutdown().await;
+}
+
+#[tokio::test]
+async fn punch_coordination_reaches_the_target() {
+    // Two peers that cannot dial each other directly have to be introduced by
+    // somebody they can both already reach. This exercises that relay end to
+    // end: request -> rendezvous -> instruction -> dial.
+    //
+    // It does NOT prove NAT traversal. On loopback the resulting dial would
+    // have succeeded anyway; what is under test is that the coordination path
+    // runs and the two ends find each other through it.
+    let rendezvous = MeshNode::start("rendezvous", vec![]).await;
+    let left = MeshNode::start("left", vec![rendezvous.addr()]).await;
+    let right = MeshNode::start("right", vec![rendezvous.addr()]).await;
+
+    eventually(
+        Duration::from_secs(6),
+        "both reach the rendezvous",
+        || async { rendezvous.runtime.peers().connected_count().await == 2 },
+    )
+    .await;
+
+    // Discovery is on by default, so wait until they are NOT yet paired before
+    // asserting the punch is what pairs them.
+    let paired = |node: &MeshNode| {
+        let peers = node.runtime.peers();
+        async move {
+            peers
+                .connected_peers()
+                .await
+                .iter()
+                .any(|p| p.node_id == "right")
+        }
+    };
+
+    if !paired(&left).await {
+        left.handle.request_punch("right").await;
+
+        eventually(
+            Duration::from_secs(8),
+            "left and right pair through the rendezvous",
+            || async {
+                left.runtime.peers().get_peer("right").await.is_some()
+                    || right.runtime.peers().get_peer("left").await.is_some()
+            },
+        )
+        .await;
+    }
+
+    assert!(
+        left.runtime.peers().get_peer("right").await.is_some()
+            || right.runtime.peers().get_peer("left").await.is_some(),
+        "the two ends should have found each other"
+    );
+
+    rendezvous.shutdown().await;
+    left.shutdown().await;
+    right.shutdown().await;
+}

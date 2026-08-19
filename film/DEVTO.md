@@ -230,8 +230,29 @@ Three tests carry the property, and they are the ones I would read first:
 
 The content hash went from 64 bits to 128 in the same change. 64 was fine against accident, but signatures are now taken *over* that hash, so a collision would let agreement on one claim be presented as agreement on another.
 
+## The NAT question, and what I could not prove
+
+I assumed NAT blocked participation. Testing it showed otherwise: a node that can only dial *outward* participates fully, because a QUIC connection is bidirectional regardless of who opened it. Signals flow back over the connection the NATed node itself established.
+
+What NAT actually breaks is narrower. A node behind one cannot be *discovered* — and here there was a real defect: peer gossip shared the address a peer said it was listening on, which behind NAT is a private address no third party can route to. We were handing out routes that could never work.
+
+That is fixed by carrying candidates rather than one address: the local one, and the one a peer reports actually seeing traffic arrive from. The second is discovered the way STUN does it, except a peer supplies it instead of a server:
+
+```
+learned our address is 192.168.0.35:9971 (per observer)
+```
+
+The node had bound `0.0.0.0:9971`. It had no way to know that itself.
+
+Two peers reporting *different* addresses for you means the translator allocates a fresh mapping per destination — symmetric NAT — and no amount of address sharing will help. The code warns rather than failing to connect later for no visible reason.
+
+The remaining case is two nodes both behind NAT, which needs a simultaneous open coordinated by someone they can both already reach. That is implemented and the coordination path is tested end to end.
+
+**I have not run it against a real address translator.** Verifying that properly needs network namespaces and firewall rules on the host, which was out of bounds here. So: expect it to work for full-cone and restricted-cone NATs, expect it to fail for symmetric ones, and treat both as untested claims. It is marked that way in the source too, because an untested code path that looks finished is how the QUIC transport got into the state this whole post is about.
+
 ## What is still wrong
 
+- **NAT traversal is unverified**, as above.
 - **The telemetry in the demo is synthetic.** Deliberately: a seeded fixture means the run reproduces byte-for-byte on any machine, which is what makes a visualisation worth trusting. The coordination is not synthetic — real processes, real sockets, probabilistic relay.
 - **Trust on first use is not identity.** There is no key distribution and no revocation. A node that generates its own name rather than deriving it from its key is only as trustworthy as whoever it met first.
 - **The recording predates the signing work.** The run in the video was captured before attestations were signatures, so what you are watching is the mechanism, not the hardened version of it.

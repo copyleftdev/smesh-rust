@@ -40,7 +40,9 @@ use crate::journal::Journal;
 
 use crate::peer::{Peer, PeerManager, PeerState};
 use crate::runtime::RuntimeEvent;
-use crate::transport::{QuicTransport, TransportConfig, TransportError, TransportMessage};
+use crate::transport::{
+    PeerCandidates, QuicTransport, TransportConfig, TransportError, TransportMessage,
+};
 
 /// First retry delay after a peer is lost.
 const RECONNECT_BASE: Duration = Duration::from_millis(500);
@@ -172,6 +174,11 @@ struct MeshCtx {
     /// trust-on-first-use: it cannot help if the impostor arrives first, but it
     /// makes a name unstealable for the rest of the run.
     pinned_keys: RwLock<HashMap<NodeId, String>>,
+    /// Our own address as peers report seeing it.
+    ///
+    /// Behind NAT this is the only address anyone else can reach us on, and
+    /// there is no way to discover it locally — a peer has to tell us.
+    reflexive_addr: RwLock<Option<SocketAddr>>,
     max_peers_shared: usize,
     peer_discovery: bool,
     journal: Arc<Journal>,
@@ -182,6 +189,7 @@ struct MeshCtx {
 pub struct MeshHandle {
     transport: Arc<QuicTransport>,
     listen_addr: SocketAddr,
+    ctx: Arc<MeshCtx>,
     tasks: Vec<JoinHandle<()>>,
 }
 
@@ -199,6 +207,20 @@ impl MeshHandle {
     /// Number of live connections.
     pub async fn connection_count(&self) -> usize {
         self.transport.peer_count().await
+    }
+
+    /// Ask every reachable peer to arrange a simultaneous open with `target`.
+    ///
+    /// Normally triggered automatically when a discovered peer answers on none
+    /// of its addresses. Exposed so the path can be driven directly, by a test
+    /// or by an operator who knows a peer is behind NAT.
+    pub async fn request_punch(&self, target: &str) {
+        request_punch(&self.ctx, target).await;
+    }
+
+    /// The address peers report seeing us at, once one has told us.
+    pub async fn reflexive_addr(&self) -> Option<SocketAddr> {
+        *self.ctx.reflexive_addr.read().await
     }
 
     /// Close the endpoint and stop the mesh tasks.
@@ -290,6 +312,7 @@ pub(crate) async fn start(
         dialed: RwLock::new(HashSet::new()),
         reconnect: RwLock::new(HashMap::new()),
         pinned_keys: RwLock::new(HashMap::new()),
+        reflexive_addr: RwLock::new(None),
         max_peers_shared: config.max_peers_shared,
         peer_discovery: config.peer_discovery,
         journal,
@@ -361,6 +384,7 @@ pub(crate) async fn start(
         MeshHandle {
             transport: Arc::clone(&transport),
             listen_addr,
+            ctx: Arc::clone(&ctx),
             tasks,
         },
         transport,
@@ -380,7 +404,7 @@ async fn dial(ctx: &MeshCtx, addr: SocketAddr) -> Result<(), TransportError> {
     let result = async {
         ctx.transport.connect(addr).await?;
         ctx.dialed.write().await.insert(addr);
-        ctx.transport.send(addr, hello(ctx)).await
+        ctx.transport.send(addr, hello(ctx, None)).await
     }
     .await;
 
@@ -395,12 +419,63 @@ async fn dial(ctx: &MeshCtx, addr: SocketAddr) -> Result<(), TransportError> {
     result
 }
 
-fn hello(ctx: &MeshCtx) -> TransportMessage {
+/// Our introduction. `observed` tells the other side where we see it, which is
+/// how a node behind NAT learns the address the rest of the world can use.
+fn hello(ctx: &MeshCtx, observed: Option<SocketAddr>) -> TransportMessage {
     TransportMessage::Hello {
         node_id: ctx.local_node_id.clone(),
         public_key: ctx.local_public_key.clone(),
         listen_addr: ctx.listen_addr,
+        observed_addr: observed,
     }
+}
+
+/// Everywhere we can currently be reached.
+async fn own_candidates(ctx: &MeshCtx) -> PeerCandidates {
+    PeerCandidates {
+        node_id: ctx.local_node_id.clone(),
+        local_addr: ctx.listen_addr,
+        observed_addr: *ctx.reflexive_addr.read().await,
+    }
+}
+
+/// Record the address a peer says it sees us at.
+///
+/// Two peers reporting different addresses for us means the NAT allocates a
+/// fresh mapping per destination — symmetric NAT — and no amount of address
+/// sharing will let a third party reach us directly. Worth knowing rather than
+/// silently failing to connect later.
+async fn learn_reflexive(ctx: &MeshCtx, observed: SocketAddr, according_to: &str) {
+    let mut current = ctx.reflexive_addr.write().await;
+    match *current {
+        Some(known) if known == observed => return,
+        Some(known) => {
+            warn!(
+                "peers disagree on our address ({} vs {} per {}): symmetric NAT, direct inbound will not work",
+                known, observed, according_to
+            );
+            ctx.journal.record(
+                "reflexive_conflict",
+                json!({
+                    "known": known.to_string(),
+                    "reported": observed.to_string(),
+                    "according_to": according_to,
+                    "implication": "symmetric NAT; peers cannot reach us directly",
+                }),
+            );
+            return;
+        }
+        None => {}
+    }
+
+    *current = Some(observed);
+    drop(current);
+
+    info!("learned our address is {} (per {})", observed, according_to);
+    ctx.journal.record(
+        "reflexive_address",
+        json!({ "address": observed.to_string(), "according_to": according_to }),
+    );
 }
 
 async fn inbound_loop(
@@ -414,7 +489,8 @@ async fn inbound_loop(
                 node_id,
                 public_key,
                 listen_addr,
-            } => on_hello(&ctx, src, node_id, public_key, listen_addr).await,
+                observed_addr,
+            } => on_hello(&ctx, src, node_id, public_key, listen_addr, observed_addr).await,
 
             TransportMessage::Signal { signal, age_secs } => {
                 on_signal(&ctx, src, signal, age_secs).await
@@ -429,6 +505,12 @@ async fn inbound_loop(
             }
 
             TransportMessage::PeerResponse { peers } => on_peer_response(&ctx, peers).await,
+
+            TransportMessage::PunchRequest { target, candidates } => {
+                on_punch_request(&ctx, &target, candidates).await
+            }
+
+            TransportMessage::PunchNow { candidates } => on_punch_now(&ctx, candidates).await,
 
             TransportMessage::Ping { timestamp } => {
                 let _ = ctx
@@ -456,9 +538,16 @@ async fn on_hello(
     node_id: NodeId,
     public_key: String,
     listen_addr: SocketAddr,
+    observed_addr: Option<SocketAddr>,
 ) {
     if node_id == ctx.local_node_id {
         return;
+    }
+
+    // A peer told us where it sees us. Behind NAT that is the only address
+    // anybody else can use, and we have no other way to discover it.
+    if let Some(mine) = observed_addr {
+        learn_reflexive(ctx, mine, &node_id).await;
     }
 
     // Channel binding: the key a peer claims must be the key it actually
@@ -530,6 +619,7 @@ async fn on_hello(
         .is_some_and(|peer| peer.is_connected());
 
     let mut peer = Peer::new(node_id.clone(), listen_addr, node_id.clone());
+    peer.observed_addr = Some(src);
     peer.state = PeerState::Connected;
     peer.touch();
 
@@ -562,7 +652,7 @@ async fn on_hello(
     // must not treat the reply as a fresh introduction and answer again.
     let we_dialled = ctx.dialed.read().await.contains(&src);
     if first_contact && !we_dialled {
-        let _ = ctx.transport.send(src, hello(ctx)).await;
+        let _ = ctx.transport.send(src, hello(ctx, Some(src))).await;
 
         let peers = gossip_peers(ctx, ctx.max_peers_shared).await;
         if !peers.is_empty() {
@@ -588,31 +678,160 @@ async fn refuse(ctx: &MeshCtx, src: SocketAddr) {
 }
 
 /// Dial peers we were told about but have not met.
-async fn on_peer_response(ctx: &MeshCtx, peers: Vec<(String, SocketAddr)>) {
+async fn on_peer_response(ctx: &MeshCtx, peers: Vec<PeerCandidates>) {
     if !ctx.peer_discovery {
         return;
     }
-    for (node_id, addr) in peers {
-        if node_id == ctx.local_node_id || addr == ctx.listen_addr {
+    for candidate in peers {
+        if candidate.node_id == ctx.local_node_id {
             continue;
         }
-        if ctx.peers.get_peer(&node_id).await.is_some() {
+        if ctx.peers.get_peer(&candidate.node_id).await.is_some() {
             continue;
         }
-        debug!("learned about {} at {}, dialling", node_id, addr);
-        if let Err(e) = dial(ctx, addr).await {
-            debug!("could not reach learned peer {}: {}", addr, e);
+        if !dial_candidates(ctx, &candidate).await {
+            // Nothing answered. If it is behind NAT the only way in is for both
+            // of us to dial at once, arranged by someone we can both reach.
+            request_punch(ctx, &candidate.node_id).await;
         }
     }
 }
 
-async fn gossip_peers(ctx: &MeshCtx, max: usize) -> Vec<(String, SocketAddr)> {
+/// Relay a punch request to the peer it names.
+///
+/// This node is only the rendezvous: it can already reach both sides, so it is
+/// the one place the two of them can be told to move at the same moment. It
+/// forwards the requester's candidates and takes no further part.
+async fn on_punch_request(ctx: &MeshCtx, target: &str, candidates: PeerCandidates) {
+    let Some(addr) = connection_addr_for(ctx, target).await else {
+        debug!("cannot relay punch to {}: not connected to it", target);
+        return;
+    };
+
+    ctx.journal.record(
+        "punch_relayed",
+        json!({ "from": candidates.node_id, "to": target }),
+    );
+
+    let _ = ctx
+        .transport
+        .send(addr, TransportMessage::PunchNow { candidates })
+        .await;
+}
+
+/// Dial a peer that is dialling us at the same time.
+///
+/// Neither side can be reached cold: the first packet in either direction is
+/// dropped by the other's NAT because no mapping exists yet. Sending anyway is
+/// the point — the outbound packet creates the mapping its counterpart needs,
+/// and one of the two attempts then lands.
+///
+/// **Unverified against a real NAT.** The coordination is exercised by
+/// `punch_coordination_reaches_the_target` and the candidate ordering by unit
+/// tests, but nothing here has been run against an actual address translator.
+/// Expect it to work for full-cone and restricted-cone NATs and to fail for
+/// symmetric ones, where the mapping differs per destination — the condition
+/// `learn_reflexive` warns about.
+async fn on_punch_now(ctx: &MeshCtx, candidates: PeerCandidates) {
+    if candidates.node_id == ctx.local_node_id {
+        return;
+    }
+
+    ctx.journal.record(
+        "punch_attempt",
+        json!({
+            "peer": candidates.node_id,
+            "candidates": candidates
+                .dial_order()
+                .iter()
+                .map(|a| a.to_string())
+                .collect::<Vec<_>>(),
+        }),
+    );
+
+    let punched = dial_candidates(ctx, &candidates).await;
+    ctx.journal.record(
+        "punch_result",
+        json!({ "peer": candidates.node_id, "connected": punched }),
+    );
+}
+
+/// Ask every peer we can already reach to introduce us to `target`.
+///
+/// Used when a peer is known but none of its addresses answer, which is what
+/// being behind NAT looks like from the outside.
+async fn request_punch(ctx: &MeshCtx, target: &str) {
+    let mine = own_candidates(ctx).await;
+    let relays = ctx.transport.connected_addrs().await;
+
+    if relays.is_empty() {
+        return;
+    }
+
+    ctx.journal.record(
+        "punch_requested",
+        json!({ "target": target, "relays": relays.len() }),
+    );
+
+    for relay in relays {
+        let _ = ctx
+            .transport
+            .send(
+                relay,
+                TransportMessage::PunchRequest {
+                    target: target.to_string(),
+                    candidates: mine.clone(),
+                },
+            )
+            .await;
+    }
+}
+
+/// The connection address we currently hold for a named peer.
+async fn connection_addr_for(ctx: &MeshCtx, node_id: &str) -> Option<SocketAddr> {
+    let live: HashSet<SocketAddr> = ctx.transport.connected_addrs().await.into_iter().collect();
+
+    ctx.conn_ids
+        .read()
+        .await
+        .iter()
+        .find(|(addr, id)| id.as_str() == node_id && live.contains(*addr))
+        .map(|(addr, _)| *addr)
+}
+
+/// Try each address a peer might answer on, best first.
+///
+/// Returns whether any of them worked. A peer that answers on none of its
+/// candidates is behind something that needs both sides to move at once.
+async fn dial_candidates(ctx: &MeshCtx, candidate: &PeerCandidates) -> bool {
+    for addr in candidate.dial_order() {
+        if addr == ctx.listen_addr {
+            continue;
+        }
+        debug!("trying {} at {}", candidate.node_id, addr);
+        if dial(ctx, addr).await.is_ok() {
+            return true;
+        }
+    }
+    false
+}
+
+/// Peers we know, with every address worth trying for each.
+///
+/// This used to share only the address a peer claimed to listen on. Behind NAT
+/// that is private and unreachable, so discovery handed out routes that could
+/// never work. The observed address goes with it now.
+async fn gossip_peers(ctx: &MeshCtx, max: usize) -> Vec<PeerCandidates> {
     ctx.peers
         .connected_peers()
         .await
         .into_iter()
         .take(max)
-        .map(|p| (p.node_id, p.addr))
+        .map(|p| PeerCandidates {
+            node_id: p.node_id,
+            local_addr: p.addr,
+            observed_addr: p.observed_addr,
+        })
         .collect()
 }
 
