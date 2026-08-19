@@ -46,7 +46,7 @@ pub mod trust;
 pub use error::{Result, SmeshError};
 pub use field::Field;
 pub use network::{Hypha, Network, NetworkTopology};
-pub use node::{MaliciousBehavior, Node, NodeConfig, NodeId};
+pub use node::{MaliciousBehavior, Node, NodeConfig, NodeId, RelayDecision};
 pub use payload::{
     AgentSignalType, FindingPayload, FindingPayloadCompact, TaskPayload, TaskPayloadCompact,
     ThreatPayload, ThreatPayloadCompact,

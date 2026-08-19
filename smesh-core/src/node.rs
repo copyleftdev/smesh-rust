@@ -96,6 +96,28 @@ pub struct NodeStats {
     pub escalations_triggered: u64,
 }
 
+/// The full reasoning behind a relay choice.
+///
+/// Relaying is probabilistic: `relay` is `roll < propagation_score`. Recording
+/// both makes an otherwise unreproducible decision auditable after the fact.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelayDecision {
+    /// Whether the signal is forwarded.
+    pub relay: bool,
+    /// Intensity multiplier applied to the forwarded copy.
+    pub dampening: f64,
+    /// Probability the relay was granted with.
+    pub propagation_score: f64,
+    /// This node's trust in the signal's origin.
+    pub origin_trust: f64,
+    /// The draw that resolved the decision.
+    pub roll: f64,
+    /// Hops left in the signal's budget when it was considered.
+    pub remaining_hops: u32,
+    /// Set when the signal was refused outright, before any roll.
+    pub veto: Option<String>,
+}
+
 impl Node {
     /// Create a new node with default configuration
     pub fn new() -> Self {
@@ -170,28 +192,76 @@ impl Node {
 
     /// Decide whether to relay a signal and with what dampening
     pub fn should_relay(&self, signal: &Signal, remaining_hops: u32) -> (bool, f64) {
+        let decision = self.relay_decision(signal, remaining_hops);
+        (decision.relay, decision.dampening)
+    }
+
+    /// Decide whether to relay a signal, returning the full reasoning.
+    ///
+    /// [`Node::should_relay`] is the terse form. This one exposes the score,
+    /// the trust that fed it and the die roll that resolved it, so a relay
+    /// choice can be journalled and replayed rather than merely observed.
+    pub fn relay_decision(&self, signal: &Signal, remaining_hops: u32) -> RelayDecision {
+        let origin_trust = self.get_trust(&signal.origin_node_id);
+        let dampening = if origin_trust > 0.7 { 0.9 } else { 0.7 };
+
+        let vetoed = |reason: &str| RelayDecision {
+            relay: false,
+            dampening: 0.0,
+            propagation_score: 0.0,
+            origin_trust,
+            roll: 0.0,
+            remaining_hops,
+            veto: Some(reason.to_string()),
+        };
+
         if remaining_hops == 0 {
-            return (false, 0.0);
+            return vetoed("hop budget exhausted");
         }
 
         // Eclipse attackers black-hole traffic: they accept signals but never
         // forward them, blocking diffusion paths that route through them.
         if self.is_malicious && self.malicious_behavior == MaliciousBehavior::Eclipse {
-            return (false, 0.0);
+            return vetoed("eclipse node black-holes traffic");
         }
 
-        let origin_trust = self.get_trust(&signal.origin_node_id);
         let effective = signal.confidence * signal.current_intensity;
 
         // Propagation score
-        let prop_score = effective * origin_trust * (remaining_hops as f64 / signal.radius as f64);
+        let propagation_score =
+            effective * origin_trust * (remaining_hops as f64 / signal.radius as f64);
 
         // Probabilistic relay decision using cryptographically secure RNG
         let mut rng = rand::thread_rng();
-        let should_relay = rng.gen::<f64>() < prop_score;
-        let dampening = if origin_trust > 0.7 { 0.9 } else { 0.7 };
+        let roll = rng.gen::<f64>();
 
-        (should_relay, dampening)
+        RelayDecision {
+            relay: roll < propagation_score,
+            dampening,
+            propagation_score,
+            origin_trust,
+            roll,
+            remaining_hops,
+            veto: None,
+        }
+    }
+
+    /// Everyone who attests to a signal: its origin plus every reinforcer.
+    ///
+    /// Reinforcement is an *independent* attestation to the same claim, so the
+    /// size of this set is how many parties corroborate it. Relaying a signal
+    /// does not put you in it — only asserting it does.
+    pub fn attesters(signal: &Signal) -> Vec<String> {
+        let mut out = Vec::with_capacity(signal.reinforced_by.len() + 1);
+        if !signal.origin_node_id.is_empty() {
+            out.push(signal.origin_node_id.clone());
+        }
+        for id in &signal.reinforced_by {
+            if !out.contains(id) {
+                out.push(id.clone());
+            }
+        }
+        out
     }
 
     /// Decide whether to trigger SMESH+ escalation
