@@ -173,6 +173,49 @@ impl PeerCandidates {
     pub fn is_reachable(&self) -> bool {
         !self.dial_order().is_empty()
     }
+
+    /// Classify a connection that answered at `answered`, in the sense of ICE
+    /// candidate types (RFC 8445 §5.1.1).
+    ///
+    /// This is the whole evidentiary point of a punch. A win on the observed
+    /// address *when it differs from the bound one* means a packet reached a
+    /// public port the NAT allocated — a real translation was traversed, so the
+    /// punch demonstrably did something. Anything else is a `host` win: the peer
+    /// answered at the address it bound, so the path was already open and no
+    /// traversal was shown. In particular, observed == bound is `host`, which is
+    /// exactly the "a direct delivery proves nothing" case made explicit.
+    pub fn classify(&self, answered: SocketAddr) -> CandidateKind {
+        match self.observed_addr {
+            Some(obs) if obs == answered && obs != self.local_addr => {
+                CandidateKind::ServerReflexive
+            }
+            _ => CandidateKind::Host,
+        }
+    }
+}
+
+/// The kind of path a connection to a peer turned out to use, named after the
+/// ICE candidate types it mirrors (RFC 8445 §5.1.1).
+///
+/// Recorded so a successful punch is self-labelling: `ServerReflexive` is proof
+/// a NAT translation was traversed; `Host` is a direct path that says nothing
+/// about NAT traversal, whether the peer was same-LAN or already public.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CandidateKind {
+    /// Reached at the peer's own bound address — no NAT rewrite in play.
+    Host,
+    /// Reached at a public address a NAT allocated, distinct from the bound one.
+    ServerReflexive,
+}
+
+impl CandidateKind {
+    /// The label used in journals and logs.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CandidateKind::Host => "host",
+            CandidateKind::ServerReflexive => "server-reflexive",
+        }
+    }
 }
 
 impl TransportMessage {
@@ -877,6 +920,66 @@ mod tests {
             observed_addr: Some(same),
         };
         assert_eq!(direct.dial_order(), vec![same]);
+    }
+
+    #[test]
+    fn classify_calls_the_bound_address_host() {
+        // Reached at the address the peer bound: no NAT rewrite, so this proves
+        // nothing about traversal even though the connection is direct.
+        let c = PeerCandidates {
+            node_id: "b".into(),
+            local_addr: "192.168.1.20:9000".parse().unwrap(),
+            observed_addr: Some("203.0.113.7:54321".parse().unwrap()),
+        };
+        assert_eq!(
+            c.classify("192.168.1.20:9000".parse().unwrap()),
+            CandidateKind::Host,
+        );
+    }
+
+    #[test]
+    fn classify_calls_the_translated_address_server_reflexive() {
+        // Reached at the public port the NAT allocated, distinct from the bound
+        // one — a translation was traversed. This is the proof a punch worked.
+        let c = PeerCandidates {
+            node_id: "b".into(),
+            local_addr: "192.168.1.20:9000".parse().unwrap(),
+            observed_addr: Some("203.0.113.7:54321".parse().unwrap()),
+        };
+        assert_eq!(
+            c.classify("203.0.113.7:54321".parse().unwrap()),
+            CandidateKind::ServerReflexive,
+        );
+    }
+
+    #[test]
+    fn an_observed_address_equal_to_the_bound_one_is_not_a_traversal() {
+        // No NAT in the path: the observed and bound addresses coincide, so even
+        // a win on the observed address is only a host candidate. This is the
+        // hop-0-is-ambiguous case made explicit — a direct delivery here is not
+        // evidence of a punch.
+        let same: SocketAddr = "203.0.113.7:9402".parse().unwrap();
+        let c = PeerCandidates {
+            node_id: "b".into(),
+            local_addr: same,
+            observed_addr: Some(same),
+        };
+        assert_eq!(c.classify(same), CandidateKind::Host);
+    }
+
+    #[test]
+    fn classify_without_an_observed_address_is_host() {
+        // Nothing was ever observed for this peer, so there is no reflexive
+        // address to have traversed to.
+        let c = PeerCandidates {
+            node_id: "b".into(),
+            local_addr: "127.0.0.1:9000".parse().unwrap(),
+            observed_addr: None,
+        };
+        assert_eq!(
+            c.classify("127.0.0.1:9000".parse().unwrap()),
+            CandidateKind::Host,
+        );
     }
 
     #[test]

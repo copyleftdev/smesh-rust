@@ -762,7 +762,7 @@ async fn on_peer_response(ctx: &MeshCtx, peers: Vec<PeerCandidates>) {
         if ctx.peers.get_peer(&candidate.node_id).await.is_some() {
             continue;
         }
-        if !dial_candidates(ctx, &candidate).await {
+        if dial_candidates(ctx, &candidate).await.is_none() {
             // Nothing answered. If it is behind NAT the only way in is for both
             // of us to dial at once, arranged by someone we can both reach.
             punch_toward(ctx, &candidate).await;
@@ -812,6 +812,12 @@ async fn on_punch_request(ctx: &MeshCtx, target: &str, candidates: PeerCandidate
 ///
 /// `learn_reflexive` warns when peers disagree about our address, which is the
 /// symptom of the symmetric case.
+///
+/// The punch result now records the winning path's candidate type (RFC 8445:
+/// `server-reflexive` when the packet reached a NAT-allocated public port,
+/// `host` when the peer answered at its bound address), so a hop-0 delivery is
+/// labelled a proven traversal or an already-open path rather than left
+/// ambiguous. See [`PeerCandidates::classify`].
 async fn on_punch_now(ctx: &MeshCtx, candidates: PeerCandidates) {
     if candidates.node_id == ctx.local_node_id {
         return;
@@ -833,9 +839,11 @@ async fn on_punch_now(ctx: &MeshCtx, candidates: PeerCandidates) {
     // overlap is the whole point. Retry a couple of times in case the first
     // pass lands either side of their attempt.
     let mut punched = false;
+    let mut via = None;
     for round in 1..=PUNCH_REPLY_ROUNDS {
-        if dial_candidates(ctx, &candidates).await {
+        if let Some(addr) = dial_candidates(ctx, &candidates).await {
             punched = true;
+            via = Some((candidates.classify(addr), addr));
             break;
         }
         if ctx.peers.get_peer(&candidates.node_id).await.is_some() {
@@ -845,10 +853,16 @@ async fn on_punch_now(ctx: &MeshCtx, candidates: PeerCandidates) {
         debug!("punch round {} toward {} missed", round, candidates.node_id);
     }
 
-    ctx.journal.record(
-        "punch_result",
-        json!({ "peer": candidates.node_id, "connected": punched }),
-    );
+    // Record *how* it connected, not just that it did: a server-reflexive win is
+    // proof a NAT was traversed, a host win is not. The peer-already-present
+    // branch connects by a path we did not dial, so its candidate type is left
+    // unstated rather than guessed.
+    let mut result = json!({ "peer": candidates.node_id, "connected": punched });
+    if let Some((kind, addr)) = via {
+        result["via"] = json!(kind.as_str());
+        result["addr"] = json!(addr.to_string());
+    }
+    ctx.journal.record("punch_result", result);
 }
 
 /// Punch toward a peer: ask for the introduction and dial at the same moment.
@@ -877,10 +891,16 @@ async fn punch_toward(ctx: &MeshCtx, candidate: &PeerCandidates) -> bool {
 
         // Ask the other side to start, then start ourselves without waiting.
         request_punch(ctx, &candidate.node_id).await;
-        if dial_candidates(ctx, candidate).await {
+        if let Some(addr) = dial_candidates(ctx, candidate).await {
+            let kind = candidate.classify(addr);
             ctx.journal.record(
                 "punch_succeeded",
-                json!({ "peer": candidate.node_id, "round": round }),
+                json!({
+                    "peer": candidate.node_id,
+                    "round": round,
+                    "via": kind.as_str(),
+                    "addr": addr.to_string(),
+                }),
             );
             return true;
         }
@@ -977,13 +997,17 @@ async fn connection_addr_for(ctx: &MeshCtx, node_id: &str) -> Option<SocketAddr>
 ///
 /// Returns whether any of them worked. A peer that answers on none of its
 /// candidates is behind something that needs both sides to move at once.
-async fn dial_candidates(ctx: &MeshCtx, candidate: &PeerCandidates) -> bool {
+/// Dial a peer's candidate addresses, best first, returning the one that
+/// answered. The winning address is what lets a caller classify the path (see
+/// [`PeerCandidates::classify`]): reaching the observed address rather than the
+/// bound one is the evidence a NAT was traversed.
+async fn dial_candidates(ctx: &MeshCtx, candidate: &PeerCandidates) -> Option<SocketAddr> {
     if !candidate.is_reachable() {
         debug!(
             "{} has no usable address yet (local {} is not routable)",
             candidate.node_id, candidate.local_addr
         );
-        return false;
+        return None;
     }
 
     for addr in candidate.dial_order() {
@@ -992,10 +1016,10 @@ async fn dial_candidates(ctx: &MeshCtx, candidate: &PeerCandidates) -> bool {
         }
         debug!("trying {} at {}", candidate.node_id, addr);
         if dial(ctx, addr).await.is_ok() {
-            return true;
+            return Some(addr);
         }
     }
-    false
+    None
 }
 
 /// Peers we know, with every address worth trying for each.
