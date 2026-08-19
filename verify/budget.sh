@@ -50,10 +50,28 @@ guard_load() {
 }
 
 # Run a command inside the budget: capped memory, capped time, low priority.
+#
+# The virtual-memory ceiling turns a runaway into a clean allocation failure
+# rather than an OOM kill that takes something else with it. It suits native
+# processes; see `budgeted_jvm` for why it does not suit a JVM.
 budgeted() {
   guard_load
-  # A virtual-memory ceiling turns a runaway into a clean allocation failure
-  # rather than an OOM kill that takes something else with it.
   ( ulimit -v $(( VERIFY_MEM_MB * 1024 )) 2>/dev/null || true
     exec nice -n "$VERIFY_NICE" ionice -c3 timeout --signal=INT "$VERIFY_TIMEOUT" "$@" )
+}
+
+# As above, without the virtual-memory ceiling.
+#
+# A JVM reserves far more address space than it will ever commit -- compressed
+# class space alone asks for a gigabyte before any heap -- so `ulimit -v` sized
+# to the intended heap stops it starting at all. It fails as
+# "Could not allocate compressed class space", which reads like a memory
+# shortage and is really the guardrail. Found when this ran on a CI box with a
+# smaller budget than the machine it was written on.
+#
+# The heap is capped by -Xmx instead, which is the JVM's own instrument for the
+# job and is precise about what it limits.
+budgeted_jvm() {
+  guard_load
+  nice -n "$VERIFY_NICE" ionice -c3 timeout --signal=INT "$VERIFY_TIMEOUT" "$@"
 }
