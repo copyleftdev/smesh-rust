@@ -10,10 +10,11 @@ use smesh_agent::{
     benchmark_backend, print_comparison, AgentCoordinator, AgentRole, ClaudeClient, ClaudeConfig,
     CoordinatorConfig, OpenRouterClient, TaskDefinition,
 };
-use smesh_core::{Network, NetworkTopology, Signal, SignalType};
-use smesh_runtime::{RuntimeConfig, SmeshRuntime};
+use smesh_core::{Network, NetworkTopology, Node, Signal, SignalType};
+use smesh_runtime::{MeshConfig, RuntimeConfig, RuntimeEvent, SmeshRuntime};
 
 mod adjudicate;
+mod analysis;
 mod owasp;
 mod resilience;
 mod review;
@@ -175,7 +176,6 @@ enum Commands {
         json: Option<PathBuf>,
     },
 
-
     /// Run web red team mission against a live target (authorized testing only)
     Redteam {
         /// Target domain (e.g., example.com)
@@ -246,6 +246,103 @@ enum Commands {
         /// Consensus threshold (agents that must agree)
         #[arg(long, default_value = "3")]
         consensus: u32,
+    },
+
+    /// Orchestrate the multi-concern analysis mesh as real processes
+    Orchestrate {
+        /// Directory for journals and the merged timeline
+        #[arg(long, default_value = "runs/latest")]
+        out: PathBuf,
+
+        /// First port; concerns take consecutive ports from here
+        #[arg(long, default_value = "9301")]
+        base_port: u16,
+
+        /// Corpus seed, shared by every analyst
+        #[arg(long, default_value = "42")]
+        seed: u64,
+
+        /// Wall-clock milliseconds per corpus minute
+        #[arg(long, default_value = "700")]
+        bucket_ms: u64,
+
+        /// Distinct concerns that must concur for consensus
+        #[arg(long, default_value = "4")]
+        consensus_threshold: usize,
+
+        /// Extra gossip time after the corpus ends, in milliseconds
+        #[arg(long, default_value = "6000")]
+        settle_ms: u64,
+    },
+
+    /// Run one analyst node of the analysis mesh (usually spawned by orchestrate)
+    Analyze {
+        /// Which concern this analyst owns
+        #[arg(long)]
+        concern: String,
+
+        /// Address to listen on
+        #[arg(long, default_value = "127.0.0.1:0")]
+        bind: String,
+
+        /// Peer to dial; repeat for several
+        #[arg(long = "peer")]
+        peers: Vec<String>,
+
+        /// Where to write this node's journal
+        #[arg(long)]
+        journal: Option<PathBuf>,
+
+        /// Shared run epoch in unix milliseconds
+        #[arg(long)]
+        run_epoch: Option<i64>,
+
+        /// Corpus seed
+        #[arg(long, default_value = "42")]
+        seed: u64,
+
+        /// Wall-clock milliseconds per corpus minute
+        #[arg(long, default_value = "700")]
+        bucket_ms: u64,
+
+        /// Distinct concerns that must concur for consensus
+        #[arg(long, default_value = "4")]
+        consensus_threshold: usize,
+
+        /// Peers to wait for before starting the timeline
+        #[arg(long, default_value = "0")]
+        expect_peers: usize,
+
+        /// Extra gossip time after the corpus ends, in milliseconds
+        #[arg(long, default_value = "6000")]
+        settle_ms: u64,
+    },
+
+    /// Run one node on a live P2P mesh over QUIC
+    Mesh {
+        /// Address to listen on (port 0 lets the OS pick)
+        #[arg(long, default_value = "127.0.0.1:0")]
+        bind: String,
+
+        /// Peer to dial on startup; repeat for several
+        #[arg(long = "peer")]
+        peers: Vec<String>,
+
+        /// Readable node id (defaults to a random one)
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Payload to emit onto the mesh once connected
+        #[arg(long)]
+        emit: Option<String>,
+
+        /// Seconds to wait before emitting
+        #[arg(long, default_value = "2")]
+        emit_after: u64,
+
+        /// Seconds to stay on the mesh (0 = until Ctrl-C)
+        #[arg(long, default_value = "20")]
+        duration: u64,
     },
 
     /// Benchmark the SMESH mesh against the OWASP Benchmark corpus
@@ -345,9 +442,80 @@ async fn main() -> Result<()> {
             json,
         } => cmd_resilience(nodes, &topology, trials, html, json).await,
         Commands::Redteam { target } => cmd_redteam(&target).await,
-        Commands::Fullscan { target, no_js, analyze, report } => {
-            cmd_fullscan(&target, no_js, analyze, report).await
+        Commands::Mesh {
+            bind,
+            peers,
+            name,
+            emit,
+            emit_after,
+            duration,
+        } => cmd_mesh(&bind, &peers, name, emit, emit_after, duration).await,
+        Commands::Orchestrate {
+            out,
+            base_port,
+            seed,
+            bucket_ms,
+            consensus_threshold,
+            settle_ms,
+        } => {
+            analysis::orchestrate::run(analysis::orchestrate::RunConfig {
+                out_dir: out,
+                base_port,
+                seed,
+                bucket_ms,
+                consensus_threshold,
+                settle_ms,
+            })
+            .await
+            .map(|_| ())
         }
+        Commands::Analyze {
+            concern,
+            bind,
+            peers,
+            journal,
+            run_epoch,
+            seed,
+            bucket_ms,
+            consensus_threshold,
+            expect_peers,
+            settle_ms,
+        } => {
+            let concern = analysis::concern::Concern::parse(&concern).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "unknown concern '{concern}'; expected one of: {}",
+                    analysis::concern::Concern::all()
+                        .iter()
+                        .map(|c| c.name())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })?;
+
+            analysis::node::run(analysis::node::AnalystConfig {
+                concern,
+                bind: bind.parse()?,
+                peers: peers
+                    .iter()
+                    .map(|p| p.parse::<std::net::SocketAddr>())
+                    .collect::<Result<Vec<_>, _>>()?,
+                journal,
+                run_epoch_ms: run_epoch.unwrap_or_else(|| chrono::Utc::now().timestamp_millis()),
+                seed,
+                bucket_ms,
+                consensus_threshold,
+                expect_peers,
+                settle_ms,
+                verbose: true,
+            })
+            .await
+        }
+        Commands::Fullscan {
+            target,
+            no_js,
+            analyze,
+            report,
+        } => cmd_fullscan(&target, no_js, analyze, report).await,
         Commands::Bounty {
             path,
             max_files,
@@ -440,7 +608,9 @@ async fn cmd_resilience(
         ..Default::default()
     };
 
-    println!("Sweeping attacks over the real mesh ({nodes} nodes, {topology}, {trials} trials/point)…");
+    println!(
+        "Sweeping attacks over the real mesh ({nodes} nodes, {topology}, {trials} trials/point)…"
+    );
     let report_data = resilience::run_benchmark(cfg);
 
     report::print_report(&report_data);
@@ -514,7 +684,9 @@ async fn cmd_owasp(
 }
 
 async fn cmd_fullscan(target: &str, no_js: bool, analyze: bool, report: bool) -> Result<()> {
-    use smesh_bounty::{FullSpectrumConfig, run_full_spectrum, analyze_exploitability, generate_report};
+    use smesh_bounty::{
+        analyze_exploitability, generate_report, run_full_spectrum, FullSpectrumConfig,
+    };
 
     let mut config = FullSpectrumConfig::full(target);
     if no_js {
@@ -592,8 +764,7 @@ async fn cmd_bounty(
         ..config
     };
 
-    let mut coordinator =
-        BountyCoordinator::new(config).map_err(|e| anyhow::anyhow!("{}", e))?;
+    let mut coordinator = BountyCoordinator::new(config).map_err(|e| anyhow::anyhow!("{}", e))?;
 
     let result = coordinator
         .run()
@@ -1198,4 +1369,171 @@ fn truncate_str(s: &str, max_len: usize) -> String {
     } else {
         format!("{}...", &s[..max_len - 3])
     }
+}
+
+/// Run one node on a live P2P mesh over QUIC.
+///
+/// Each process owns a single SMESH node. Signals emitted here go out to every
+/// connected peer; signals arriving from peers are admitted by this node's own
+/// sensing threshold and forwarded by its own relay policy.
+async fn cmd_mesh(
+    bind: &str,
+    peers: &[String],
+    name: Option<String>,
+    emit: Option<String>,
+    emit_after: u64,
+    duration: u64,
+) -> Result<()> {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let bind_addr: std::net::SocketAddr = bind
+        .parse()
+        .map_err(|e| anyhow::anyhow!("invalid --bind {bind}: {e}"))?;
+
+    let bootstrap: Vec<std::net::SocketAddr> = peers
+        .iter()
+        .map(|p| {
+            p.parse::<std::net::SocketAddr>()
+                .map_err(|e| anyhow::anyhow!("invalid --peer {p}: {e}"))
+        })
+        .collect::<Result<_>>()?;
+
+    // One node per process: this is the identity we present on the wire.
+    let mut node = Node::new();
+    if let Some(name) = name {
+        node.id = name;
+    }
+    let node_id = node.id.clone();
+
+    let mut network = Network::new();
+    network.add_node(node);
+
+    let mut runtime = SmeshRuntime::with_network(
+        network,
+        RuntimeConfig {
+            tick_interval_ms: 100,
+            ..Default::default()
+        },
+    );
+    let mut events = runtime
+        .take_events()
+        .ok_or_else(|| anyhow::anyhow!("event receiver already taken"))?;
+    let runtime = Arc::new(runtime);
+
+    let mesh = runtime
+        .join_mesh(
+            MeshConfig {
+                bind_addr,
+                bootstrap: bootstrap.clone(),
+                keepalive_interval_ms: 3_000,
+                ..Default::default()
+            },
+            &node_id,
+        )
+        .await?;
+
+    println!("╭─ SMESH mesh node");
+    println!("│  node id   {node_id}");
+    println!("│  listening {}", mesh.listen_addr());
+    if bootstrap.is_empty() {
+        println!("│  bootstrap (none — waiting for peers to dial in)");
+    } else {
+        for addr in &bootstrap {
+            println!("│  bootstrap {addr}");
+        }
+    }
+    println!("╰─");
+
+    // Decay and local diffusion keep running while we are on the mesh.
+    {
+        let runtime = Arc::clone(&runtime);
+        tokio::spawn(async move { runtime.run().await });
+    }
+
+    // Report everything except the per-tick chatter.
+    let events_task = tokio::spawn(async move {
+        while let Some(event) = events.recv().await {
+            match event {
+                RuntimeEvent::TickCompleted { .. } => {}
+                RuntimeEvent::PeerConnected { peer_id } => {
+                    println!("  [peer]   connected {peer_id}");
+                }
+                RuntimeEvent::PeerDisconnected { peer_id } => {
+                    println!("  [peer]   disconnected {peer_id}");
+                }
+                RuntimeEvent::SignalEmitted { hash } => {
+                    println!("  [emit]   {hash}");
+                }
+                RuntimeEvent::SignalReceived { hash, from, hops } => {
+                    println!("  [recv]   {hash} from {from} (hop {hops})");
+                }
+                RuntimeEvent::SignalReinforced { hash, count } => {
+                    println!("  [reinf]  {hash} ×{count}");
+                }
+                RuntimeEvent::SignalExpired { hash } => {
+                    println!("  [expire] {hash}");
+                }
+            }
+        }
+    });
+
+    if let Some(payload) = emit {
+        let runtime = Arc::clone(&runtime);
+        let node_id = node_id.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(emit_after)).await;
+            let signal = Signal::builder(SignalType::Coordination)
+                .payload(payload.as_bytes().to_vec())
+                .origin(&node_id)
+                .intensity(1.0)
+                .ttl(120.0)
+                .radius(4)
+                .build();
+            runtime.emit(signal, &node_id).await;
+        });
+    }
+
+    if duration == 0 {
+        println!("\nrunning until Ctrl-C…\n");
+        tokio::signal::ctrl_c().await?;
+    } else {
+        println!("\nrunning for {duration}s…\n");
+        tokio::time::sleep(Duration::from_secs(duration)).await;
+    }
+
+    let stats = runtime.stats().await;
+    println!("\n╭─ final state");
+    println!("│  ticks            {}", stats.tick_count);
+    println!("│  peers known      {}", stats.peer_count);
+    println!("│  peers connected  {}", stats.connected_peers);
+    println!("│  live connections {}", mesh.connection_count().await);
+    println!("│  active signals   {}", stats.active_signals);
+    println!("│  reinforcements   {}", stats.total_reinforcements);
+
+    for peer in runtime.peers().connected_peers().await {
+        println!(
+            "│  peer {} at {} rtt {}ms",
+            peer.id, peer.addr, peer.latency_ms
+        );
+    }
+
+    let network = runtime.network();
+    let network = network.read().await;
+    if let Some(node) = network.get_node(&node_id) {
+        println!(
+            "│  emitted {} · sensed {} · relayed {} · reinforced {}",
+            node.stats.signals_emitted,
+            node.stats.signals_sensed,
+            node.stats.signals_relayed,
+            node.stats.signals_reinforced
+        );
+    }
+    println!("╰─");
+
+    runtime.shutdown().await;
+    mesh.shutdown().await;
+    events_task.abort();
+
+    Ok(())
 }

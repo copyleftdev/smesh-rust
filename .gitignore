@@ -63,3 +63,7 @@ owasp-results.json
 adjudication-report.html
 adjudication-results.json
 smesh-demo.mp4
+
+# Recorded mesh runs (journals + merged timelines)
+runs/
+
