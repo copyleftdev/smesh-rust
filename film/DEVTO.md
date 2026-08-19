@@ -270,6 +270,24 @@ left -> right       :  138.197.31.115:50343
 
 A different external port per destination. That is symmetric NAT, and no amount of address sharing survives it: right was told to expect `:9401` and left arrives from `:50343`, so both directions get dropped. Hole punching cannot work through it, which is exactly what the code already said it could not do — now measured rather than assumed.
 
+## The other NAT
+
+That left half the claim unmeasured. Symmetric NAT was proven to defeat punching, but the case the code said it *should* handle — a restricted-cone NAT, where the external port is stable per socket and the filtering only blocks flows you did not open — was still an expectation.
+
+So I built one. Three hosts in three regions: two with the node inside a network namespace behind a real translator, one public rendezvous between them. Endpoint-independent mapping, endpoint-dependent filtering, enforced by the kernel rather than described in a comment. A control run confirmed unsolicited inbound was still refused, so the test could not pass vacuously.
+
+Then both ends punched:
+
+```
+left:   learned our address is 165.227.78.56:9401 (per rendezvous)
+left:   trying right at 64.23.201.200:9402
+right:  [recv] d6f10091f23878929be76f5e4d62582e from left (hop 0)
+```
+
+Hop zero, and the sender is `left`, not the relay. Two nodes on opposite coasts, neither reachable cold, exchanging a signal over a connection they opened directly through both translators.
+
+Both halves of the claim are now measurements. Cone NATs punch through. Symmetric NATs do not, and fall back to relaying at the cost of one hop.
+
 ## The part that made it not matter
 
 Here is the thing I would have missed by reasoning instead of testing. A signal emitted by the node behind the New York NAT arrived at the node behind the San Francisco NAT:
@@ -286,7 +304,7 @@ That reframes the whole NAT question. The thing worth engineering was never trav
 
 ## What is still wrong
 
-- **Hole punching works for cone NATs and not symmetric ones.** The cone case is still untested; the symmetric failure is measured. Nodes behind symmetric NAT fall back to relaying, which costs a hop and a little latency.
+- **Hole punching works through cone NATs and not symmetric ones.** Both halves measured against real translators. Nodes behind symmetric NAT fall back to relaying, which costs a hop and a little latency. That is a bound of the technique, not a defect to fix.
 - **The telemetry in the demo is synthetic.** Deliberately: a seeded fixture means the run reproduces byte-for-byte on any machine, which is what makes a visualisation worth trusting. The coordination is not synthetic — real processes, real sockets, probabilistic relay.
 - **Trust on first use is not identity.** There is no key distribution and no revocation. A node that generates its own name rather than deriving it from its key is only as trustworthy as whoever it met first.
 - **The recording predates the signing work.** The run in the video was captured before attestations were signatures, so what you are watching is the mechanism, not the hardened version of it.

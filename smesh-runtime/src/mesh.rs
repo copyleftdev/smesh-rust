@@ -799,12 +799,19 @@ async fn on_punch_request(ctx: &MeshCtx, target: &str, candidates: PeerCandidate
 /// the point — the outbound packet creates the mapping its counterpart needs,
 /// and one of the two attempts then lands.
 ///
-/// **Unverified against a real NAT.** The coordination is exercised by
-/// `punch_coordination_reaches_the_target` and the candidate ordering by unit
-/// tests, but nothing here has been run against an actual address translator.
-/// Expect it to work for full-cone and restricted-cone NATs and to fail for
-/// symmetric ones, where the mapping differs per destination — the condition
-/// `learn_reflexive` warns about.
+/// **Verified against real NATs**, on three hosts in three regions:
+///
+/// - *Restricted-cone* (endpoint-independent mapping, endpoint-dependent
+///   filtering): two nodes behind separate NATs on opposite coasts connected
+///   directly, and a signal arrived at hop 0 rather than through the relay.
+/// - *Symmetric* (a fresh external port per destination): fails, as it must.
+///   The far side is told one port and packets arrive from another, so no
+///   amount of address sharing helps. Measured, not assumed — a capture showed
+///   the same socket mapped to `:9401` toward one peer and `:50343` toward
+///   another. Those nodes fall back to relaying, which costs a hop.
+///
+/// `learn_reflexive` warns when peers disagree about our address, which is the
+/// symptom of the symmetric case.
 async fn on_punch_now(ctx: &MeshCtx, candidates: PeerCandidates) {
     if candidates.node_id == ctx.local_node_id {
         return;
