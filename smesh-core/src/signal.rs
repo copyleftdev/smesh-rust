@@ -831,6 +831,21 @@ mod tests {
     }
 
     #[test]
+    fn payload_as_str_decodes_utf8_and_rejects_binary() {
+        // Used by out-of-scope crates, so nothing in the mutation scope pins
+        // it. Valid UTF-8 round-trips; invalid bytes return None rather than a
+        // fixed string.
+        let s = Signal::builder(SignalType::Data)
+            .payload(b"hello".to_vec())
+            .build();
+        assert_eq!(s.payload_as_str(), Some("hello"));
+        let b = Signal::builder(SignalType::Data)
+            .payload(vec![0xff, 0xfe])
+            .build();
+        assert_eq!(b.payload_as_str(), None, "invalid UTF-8 is not a string");
+    }
+
+    #[test]
     fn has_reached_treats_empty_as_ambient() {
         let mut s = Signal::builder(SignalType::Data).build();
         assert!(s.has_reached("anyone"), "empty reached-set is ambient");
