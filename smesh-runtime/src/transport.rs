@@ -44,8 +44,31 @@ pub enum TransportError {
 /// Messages sent over the transport
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TransportMessage {
+    /// Introduction sent on every freshly established connection.
+    ///
+    /// An inbound connection's `remote_address()` is the peer's *ephemeral*
+    /// source port, not the port it listens on, so it cannot be dialled back
+    /// or gossiped onward. `listen_addr` carries the dialable address, and
+    /// `node_id` binds the socket to a SMESH node so reinforcement can be
+    /// attributed to whoever relayed it.
+    Hello {
+        /// Sender's SMESH node id
+        node_id: String,
+        /// Address the sender accepts connections on
+        listen_addr: SocketAddr,
+    },
+
     /// A SMESH signal to propagate
-    Signal(Signal),
+    Signal {
+        /// The signal itself
+        signal: Signal,
+        /// Age of the signal, in seconds, at the moment it was sent.
+        ///
+        /// The receiver rebases `created_at` against its own field clock using
+        /// this age, so decay and expiry stay consistent between hosts whose
+        /// wall clocks disagree. Only link latency leaks into the estimate.
+        age_secs: f64,
+    },
 
     /// Peer discovery request
     PeerRequest {
@@ -64,6 +87,17 @@ pub enum TransportMessage {
 
     /// Heartbeat response
     Pong { timestamp: u64 },
+}
+
+impl TransportMessage {
+    /// Wrap a signal for transmission, stamping its age against `now`.
+    pub fn signal(signal: Signal, now: chrono::DateTime<chrono::Utc>) -> Self {
+        let age_secs = (now - signal.created_at).num_milliseconds() as f64 / 1000.0;
+        TransportMessage::Signal {
+            signal,
+            age_secs: age_secs.max(0.0),
+        }
+    }
 }
 
 /// Configuration for the transport layer
@@ -90,6 +124,20 @@ impl Default for TransportConfig {
     }
 }
 
+/// Install a rustls crypto provider for this process, exactly once.
+///
+/// rustls 0.23 refuses to pick for itself when more than one provider is
+/// compiled in, and quinn pulls in both through its own feature set. Without
+/// this, the first TLS config built panics rather than returning an error.
+fn ensure_crypto_provider() {
+    static INIT: std::sync::Once = std::sync::Once::new();
+    INIT.call_once(|| {
+        // A competing installation from elsewhere in the process is fine; we
+        // only need *a* provider to be present.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
 /// Generate self-signed certificate for QUIC
 fn generate_self_signed_cert(
 ) -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>), TransportError> {
@@ -104,6 +152,7 @@ fn generate_self_signed_cert(
 
 /// Configure QUIC server with self-signed cert
 fn configure_server() -> Result<ServerConfig, TransportError> {
+    ensure_crypto_provider();
     let (certs, key) = generate_self_signed_cert()?;
 
     let mut server_config = ServerConfig::with_single_cert(certs, key)
@@ -117,6 +166,7 @@ fn configure_server() -> Result<ServerConfig, TransportError> {
 
 /// Configure QUIC client (skip server verification for P2P)
 fn configure_client() -> ClientConfig {
+    ensure_crypto_provider();
     let crypto = rustls::ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
@@ -178,7 +228,6 @@ pub struct QuicTransport {
     /// QUIC endpoint (server + client)
     endpoint: Endpoint,
     /// Transport configuration
-    #[allow(dead_code)]
     config: TransportConfig,
     /// Active connections by address
     connections: Arc<RwLock<std::collections::HashMap<SocketAddr, Connection>>>,
@@ -244,8 +293,19 @@ impl QuicTransport {
         // Store connection
         {
             let mut conns = self.connections.write().await;
-            conns.insert(addr, connection);
+            conns.insert(addr, connection.clone());
         }
+
+        // A QUIC connection is bidirectional regardless of who dialled it. The
+        // accept loop only pumps connections we accepted, so a dialled peer's
+        // streams need their own reader or nothing it sends us is ever read.
+        let connections = Arc::clone(&self.connections);
+        let incoming_tx = self.incoming_tx.clone();
+        let max_message_size = self.config.max_message_size;
+        tokio::spawn(async move {
+            Self::handle_connection(connection, addr, incoming_tx, max_message_size).await;
+            connections.write().await.remove(&addr);
+        });
 
         Ok(())
     }
@@ -300,22 +360,59 @@ impl QuicTransport {
         Ok(())
     }
 
-    /// Broadcast a signal to multiple peers
+    /// Broadcast a signal to specific peers
     pub async fn broadcast(
         &self,
         addrs: &[SocketAddr],
         signal: Signal,
     ) -> Vec<Result<(), TransportError>> {
-        let mut results = Vec::new();
+        let now = chrono::Utc::now();
+        let sends = addrs
+            .iter()
+            .map(|addr| self.send(*addr, TransportMessage::signal(signal.clone(), now)));
 
-        for addr in addrs {
-            let result = self
-                .send(*addr, TransportMessage::Signal(signal.clone()))
-                .await;
-            results.push(result);
-        }
+        futures::future::join_all(sends).await
+    }
 
-        results
+    /// Addresses of every live connection, dialled or accepted.
+    pub async fn connected_addrs(&self) -> Vec<SocketAddr> {
+        self.connections.read().await.keys().copied().collect()
+    }
+
+    /// Send a message over every live connection, optionally skipping one.
+    ///
+    /// `except` is how a gossip relay avoids echoing a message straight back
+    /// to the peer it just arrived from. Returns the addresses the message
+    /// actually reached; failures are logged and omitted, since a dead peer
+    /// must not abort delivery to healthy ones.
+    pub async fn broadcast_all(
+        &self,
+        msg: &TransportMessage,
+        except: Option<SocketAddr>,
+    ) -> Vec<SocketAddr> {
+        let targets: Vec<SocketAddr> = self
+            .connections
+            .read()
+            .await
+            .keys()
+            .copied()
+            .filter(|a| Some(*a) != except)
+            .collect();
+
+        let sends = targets.iter().map(|addr| self.send(*addr, msg.clone()));
+
+        futures::future::join_all(sends)
+            .await
+            .into_iter()
+            .zip(targets)
+            .filter_map(|(result, addr)| match result {
+                Ok(()) => Some(addr),
+                Err(e) => {
+                    debug!("broadcast to {} failed: {}", addr, e);
+                    None
+                }
+            })
+            .collect()
     }
 
     /// Start accepting incoming connections
@@ -327,6 +424,7 @@ impl QuicTransport {
                 Some(incoming) => {
                     let connections = Arc::clone(&self.connections);
                     let incoming_tx = self.incoming_tx.clone();
+                    let max_message_size = self.config.max_message_size;
 
                     tokio::spawn(async move {
                         match incoming.await {
@@ -340,8 +438,17 @@ impl QuicTransport {
                                     conns.insert(addr, connection.clone());
                                 }
 
-                                // Handle incoming streams
-                                Self::handle_connection(connection, addr, incoming_tx).await;
+                                // Handle incoming streams until the peer goes
+                                // away, then drop it from the connection map so
+                                // broadcasts stop targeting a dead socket.
+                                Self::handle_connection(
+                                    connection,
+                                    addr,
+                                    incoming_tx,
+                                    max_message_size,
+                                )
+                                .await;
+                                connections.write().await.remove(&addr);
                             }
                             Err(e) => {
                                 warn!("Failed to accept connection: {}", e);
@@ -359,13 +466,16 @@ impl QuicTransport {
         connection: Connection,
         addr: SocketAddr,
         incoming_tx: mpsc::Sender<(SocketAddr, TransportMessage)>,
+        max_message_size: usize,
     ) {
         loop {
             match connection.accept_uni().await {
                 Ok(recv_stream) => {
                     let tx = incoming_tx.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = Self::handle_stream(recv_stream, addr, tx).await {
+                        if let Err(e) =
+                            Self::handle_stream(recv_stream, addr, tx, max_message_size).await
+                        {
                             debug!("Stream error from {}: {}", addr, e);
                         }
                     });
@@ -383,6 +493,7 @@ impl QuicTransport {
         mut recv_stream: RecvStream,
         addr: SocketAddr,
         incoming_tx: mpsc::Sender<(SocketAddr, TransportMessage)>,
+        max_message_size: usize,
     ) -> Result<(), TransportError> {
         // Read length prefix
         let mut len_buf = [0u8; 4];
@@ -391,6 +502,14 @@ impl QuicTransport {
             .await
             .map_err(|e| TransportError::ReceiveFailed(e.to_string()))?;
         let len = u32::from_be_bytes(len_buf) as usize;
+
+        // The length prefix is attacker-controlled: refuse to allocate for it
+        // before checking it against the configured ceiling.
+        if len > max_message_size {
+            return Err(TransportError::ReceiveFailed(format!(
+                "message of {len} bytes from {addr} exceeds max_message_size ({max_message_size})"
+            )));
+        }
 
         // Read message data
         let mut data = vec![0u8; len];
@@ -463,10 +582,11 @@ impl Transport {
         addrs: &[SocketAddr],
         signal: Signal,
     ) -> Vec<Result<(), TransportError>> {
+        let now = chrono::Utc::now();
         let mut results = Vec::new();
         for addr in addrs {
             let result = self
-                .send(*addr, TransportMessage::Signal(signal.clone()))
+                .send(*addr, TransportMessage::signal(signal.clone(), now))
                 .await;
             results.push(result);
         }
@@ -497,16 +617,67 @@ mod tests {
             .payload(b"test".to_vec())
             .build();
 
-        let msg = TransportMessage::Signal(signal);
+        let msg = TransportMessage::signal(signal, chrono::Utc::now());
 
         let serialized = bincode::serialize(&msg).unwrap();
         let deserialized: TransportMessage = bincode::deserialize(&serialized).unwrap();
 
         match deserialized {
-            TransportMessage::Signal(s) => {
-                assert_eq!(s.payload, b"test".to_vec());
+            TransportMessage::Signal { signal, .. } => {
+                assert_eq!(signal.payload, b"test".to_vec());
             }
             _ => panic!("Wrong message type"),
         }
+    }
+
+    #[test]
+    fn test_hello_roundtrip() {
+        let msg = TransportMessage::Hello {
+            node_id: "node-a".to_string(),
+            listen_addr: "127.0.0.1:9001".parse().unwrap(),
+        };
+
+        let bytes = bincode::serialize(&msg).unwrap();
+        match bincode::deserialize::<TransportMessage>(&bytes).unwrap() {
+            TransportMessage::Hello {
+                node_id,
+                listen_addr,
+            } => {
+                assert_eq!(node_id, "node-a");
+                assert_eq!(listen_addr.port(), 9001);
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_oversized_frame_is_rejected_before_allocation() {
+        // A peer claiming a 4 GiB body must be refused on the length prefix
+        // alone, never by allocating the buffer it asked for.
+        let listener = QuicTransport::new(TransportConfig {
+            bind_addr: "127.0.0.1:0".parse().unwrap(),
+            max_message_size: 1024,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let accept = tokio::spawn(async move {
+            listener.run_accept_loop().await;
+        });
+
+        let dialer = QuicTransport::new(TransportConfig {
+            bind_addr: "127.0.0.1:0".parse().unwrap(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        dialer.connect(addr).await.unwrap();
+
+        // Oversized frames are refused; the connection itself stays usable.
+        assert_eq!(dialer.peer_count().await, 1);
+
+        accept.abort();
     }
 }

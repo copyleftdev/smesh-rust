@@ -135,6 +135,15 @@ impl PeerManager {
         }
     }
 
+    /// Record a round-trip time measured by a pong, refreshing liveness.
+    pub async fn record_latency(&self, peer_id: &str, latency_ms: u64) {
+        let mut peers = self.peers.write().await;
+        if let Some(peer) = peers.get_mut(peer_id) {
+            peer.latency_ms = latency_ms;
+            peer.touch();
+        }
+    }
+
     /// Get peer count
     pub async fn peer_count(&self) -> usize {
         let peers = self.peers.read().await;

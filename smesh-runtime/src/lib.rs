@@ -7,10 +7,14 @@
 //! - P2P networking via QUIC
 //! - Peer discovery and management
 
+pub mod journal;
+pub mod mesh;
 pub mod peer;
 pub mod runtime;
 pub mod transport;
 
-pub use peer::{Peer, PeerId, PeerManager};
+pub use journal::{Journal, JournalEvent};
+pub use mesh::{MeshConfig, MeshHandle};
+pub use peer::{Peer, PeerId, PeerManager, PeerState};
 pub use runtime::{RuntimeConfig, RuntimeEvent, RuntimeStats, SmeshRuntime};
 pub use transport::{QuicTransport, Transport, TransportConfig, TransportError, TransportMessage};
