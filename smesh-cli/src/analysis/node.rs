@@ -107,7 +107,6 @@ pub async fn run(config: AnalystConfig) -> Result<()> {
             network,
             RuntimeConfig {
                 tick_interval_ms: 100,
-                ..Default::default()
             },
         )
         .with_journal(Arc::clone(&journal)),

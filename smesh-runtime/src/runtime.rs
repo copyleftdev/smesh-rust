@@ -11,32 +11,36 @@ use serde_json::json;
 use crate::journal::{payload_preview, Journal};
 use crate::mesh::{self, MeshConfig, MeshHandle};
 use crate::peer::{PeerId, PeerManager};
-use crate::transport::{QuicTransport, TransportConfig, TransportError, TransportMessage};
+use crate::transport::{QuicTransport, TransportError, TransportMessage};
 use smesh_core::{Network, Node, NodeId, Signal};
 
 /// How often `tick` writes a full field snapshot to the journal.
 const SNAPSHOT_EVERY_TICKS: u64 = 5;
 
-/// Configuration for the SMESH runtime
+/// Configuration for the SMESH runtime.
+///
+/// One field, because one field is all the runtime reads. It previously
+/// carried three more — `transport`, `max_signals_per_tick` and
+/// `enable_propagation` — that were written by `Default`, never read anywhere,
+/// and therefore silently ignored: setting `enable_propagation: false` still
+/// propagated. Transport settings belong on [`MeshConfig`], which `join_mesh`
+/// takes and which is the only path to a live endpoint.
+///
+/// Nothing in the codebase found them, and nothing could have. Searching for a
+/// type or field name answers whether it is *written*, and all three were; the
+/// `dead_code` lint stays quiet because a `pub` field of a `pub` type may be
+/// read by a downstream crate. A knob is only real if something reads it at the
+/// point of use, so new fields here belong with the code that consumes them.
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
     /// Tick interval in milliseconds
     pub tick_interval_ms: u64,
-    /// Maximum signals to process per tick
-    pub max_signals_per_tick: usize,
-    /// Enable signal propagation
-    pub enable_propagation: bool,
-    /// Transport configuration
-    pub transport: TransportConfig,
 }
 
 impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
             tick_interval_ms: 100,
-            max_signals_per_tick: 1000,
-            enable_propagation: true,
-            transport: TransportConfig::default(),
         }
     }
 }
@@ -505,7 +509,6 @@ mod tests {
             network,
             RuntimeConfig {
                 tick_interval_ms: 10,
-                ..Default::default()
             },
         );
 

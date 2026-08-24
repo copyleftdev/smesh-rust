@@ -933,7 +933,6 @@ async fn cmd_sim(n_nodes: usize, topology_str: &str, ticks: u64) -> Result<()> {
         network,
         RuntimeConfig {
             tick_interval_ms: 10,
-            ..Default::default()
         },
     );
 
@@ -1432,7 +1431,6 @@ async fn cmd_mesh(
         network,
         RuntimeConfig {
             tick_interval_ms: 100,
-            ..Default::default()
         },
     );
     let mut events = runtime
