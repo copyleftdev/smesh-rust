@@ -24,6 +24,10 @@ echo "listing mutants..."
 cargo mutants --list 2>/dev/null | wc -l | xargs -I{} echo "  {} candidate mutants"
 echo
 
+# cargo-mutants creates only the last component of --output; if target/ is
+# absent the run dies before the baseline.
+mkdir -p target/mutants
+
 budgeted cargo mutants \
   --jobs "$VERIFY_JOBS" \
   --no-shuffle \
@@ -32,4 +36,4 @@ budgeted cargo mutants \
   -- --profile test
 
 echo
-echo "survivors are listed in target/mutants/outcomes.json"
+echo "survivors are listed in target/mutants/mutants.out/outcomes.json"

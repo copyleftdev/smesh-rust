@@ -80,7 +80,15 @@ jobs:
         # Scope is in .cargo/mutants.toml: protocol crates only. Two jobs, not
         # one per core — the runner has two, and oversubscribing a rebuild-per-
         # mutant workload makes it slower, not faster.
-        run: cargo mutants --jobs 2 --no-shuffle --output target/mutants
+        #
+        # mkdir -p first: cargo-mutants creates only the last component of
+        # --output, so on a runner where the cache restored nothing and target/
+        # does not exist yet the run dies before the baseline with "create
+        # output parent directory". Locally target/ always exists, which is why
+        # this only ever failed in CI.
+        run: |
+          mkdir -p target/mutants
+          cargo mutants --jobs 2 --no-shuffle --output target/mutants
         continue-on-error: true
 
       - name: Report survivors
