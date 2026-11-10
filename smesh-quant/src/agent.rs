@@ -152,6 +152,38 @@ pub fn compose(run: &str, metrics: &Value, chosen: &[&RecordedFinding]) -> Strin
     out
 }
 
+/// Choose findings from Jev's per-finding relevance scores (aligned with
+/// `findings`; `None` where Jev gave no answer).
+///
+/// Findings scored 0.5 or more, most relevant first. If none clears 0.5,
+/// the two closest, so a question is never answered with nothing. If Jev
+/// scored none at all, every finding, as when Jev is unreachable.
+pub fn pick_relevant<'a>(
+    findings: &'a [RecordedFinding],
+    scores: &[Option<f64>],
+) -> Vec<&'a RecordedFinding> {
+    let mut scored: Vec<(f64, &RecordedFinding)> = findings
+        .iter()
+        .zip(scores)
+        .filter_map(|(f, s)| s.map(|p| (p, f)))
+        .collect();
+    if scored.is_empty() {
+        tracing::warn!("Jev scored no findings; answering with every finding");
+        return findings.iter().collect();
+    }
+    scored.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let relevant: Vec<&RecordedFinding> = scored
+        .iter()
+        .filter(|(p, _)| *p >= 0.5)
+        .map(|(_, f)| *f)
+        .collect();
+    if relevant.is_empty() {
+        scored.into_iter().take(2).map(|(_, f)| f).collect()
+    } else {
+        relevant
+    }
+}
+
 /// Answers research questions from one run's recorded findings.
 pub struct FindingsBackend {
     run: String,
@@ -194,26 +226,12 @@ impl FindingsBackend {
         let (state, questions) = relevance_question(question, &self.findings);
         match jev.system_one(state, questions).await {
             Ok(r) => {
-                let mut scored: Vec<(f64, &RecordedFinding)> = self
+                let scores: Vec<Option<f64>> = self
                     .findings
                     .iter()
-                    .filter_map(|f| {
-                        r.noul(&format!("about_{}", f.id.replace('.', "_")))
-                            .map(|p| (p, f))
-                    })
+                    .map(|f| r.noul(&format!("about_{}", f.id.replace('.', "_"))))
                     .collect();
-                scored.sort_by(|a, b| b.0.total_cmp(&a.0));
-                let relevant: Vec<&RecordedFinding> = scored
-                    .iter()
-                    .filter(|(p, _)| *p >= 0.5)
-                    .map(|(_, f)| *f)
-                    .collect();
-                if relevant.is_empty() {
-                    // Nothing clearly relevant: offer the closest, not nothing.
-                    scored.into_iter().take(2).map(|(_, f)| f).collect()
-                } else {
-                    relevant
-                }
+                pick_relevant(&self.findings, &scores)
             }
             Err(e) => {
                 tracing::warn!(error = %e, "Jev unavailable; answering with every finding");
@@ -314,6 +332,29 @@ mod tests {
         // Only the chosen finding's track is described.
         assert!(!answer.contains("Macro evidence"));
         assert!(answer.contains("Caveats"));
+    }
+
+    #[test]
+    fn test_pick_relevant_never_answers_with_nothing() {
+        let fs = load_findings(&metrics());
+        let ids = |v: Vec<&RecordedFinding>| v.iter().map(|f| f.id.clone()).collect::<Vec<_>>();
+        // Jev answered nothing: every finding, not an empty answer.
+        assert_eq!(pick_relevant(&fs, &[None, None]).len(), 2);
+        // One clearly relevant.
+        assert_eq!(
+            ids(pick_relevant(&fs, &[Some(0.9), Some(0.1)])),
+            vec!["crypto.odds_calibrated"]
+        );
+        // None clears 0.5: the closest, most relevant first.
+        assert_eq!(
+            ids(pick_relevant(&fs, &[Some(0.2), Some(0.4)])),
+            vec!["macro.kalshi_beats_climatology", "crypto.odds_calibrated"]
+        );
+        // Partially scored.
+        assert_eq!(
+            ids(pick_relevant(&fs, &[None, Some(0.8)])),
+            vec!["macro.kalshi_beats_climatology"]
+        );
     }
 
     #[test]

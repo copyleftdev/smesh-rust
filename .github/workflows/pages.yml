@@ -28,15 +28,38 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Check the replay is present and carries no raw prices
+      - name: Check the replay is present, consistent, and carries no price fields
         run: |
           test -s site/data/replay.json
+          test -s site/data/replay.js
           python3 - <<'EOF'
           import json
           r = json.load(open("site/data/replay.json"))
           assert r["format"] == "smesh-replay/1", r.get("format")
           assert r["run"]["read_only"] is True
-          print("replay:", r["run"]["id"], r["run"]["events"], "events")
+          # Fields that would carry vendor price levels. `run.event_kinds`
+          # is skipped: it maps event names (one of them is "spot") to
+          # counts, not prices. Macro ladders use k/p/outcome, so no valid
+          # field is caught.
+          banned = {"spot", "strike", "price", "spot_kraken", "bid", "ask", "o", "h", "l", "c"}
+          def walk(o, path):
+              if isinstance(o, dict):
+                  hit = banned & o.keys()
+                  assert not hit, f"price fields {sorted(hit)} at {path}"
+                  for k, v in o.items():
+                      if path == "/run" and k == "event_kinds":
+                          continue
+                      walk(v, f"{path}/{k}")
+              elif isinstance(o, list):
+                  for i, v in enumerate(o):
+                      walk(v, f"{path}[{i}]")
+          walk(r, "")
+          # The page loads replay.js; the download is replay.json. They must agree.
+          prefix = "window.SMESH_REPLAY="
+          js = open("site/data/replay.js").read().strip()
+          assert js.startswith(prefix) and js.endswith(";"), "replay.js is not the expected wrapper"
+          assert json.loads(js[len(prefix):-1]) == r, "replay.js differs from replay.json"
+          print("replay:", r["run"]["id"], r["run"]["events"], "events; no price fields; js matches json")
           EOF
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
