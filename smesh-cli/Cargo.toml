@@ -34,3 +34,4 @@ regex = "1"
 walkdir = "2"
 notify = { version = "6", features = ["macos_kqueue"] }
 base64 = "0.22"
+async-trait.workspace = true

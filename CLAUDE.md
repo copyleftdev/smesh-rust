@@ -36,7 +36,7 @@ smesh-rust/
 # Build (release optimized with LTO)
 cargo build --release
 
-# Run all tests (404 tests; 1 live eval is #[ignore]d)
+# Run all tests (428 tests; 1 live eval is #[ignore]d)
 cargo test --workspace
 
 # Run specific crate tests
@@ -98,6 +98,13 @@ cargo run --release --bin smesh -- quant run --track crypto --days 21 --every-ho
 cargo run --release --bin smesh -- quant export-site --run runs/quant-full --out site/data
 cargo run --release --bin smesh -- a2a serve --jev --agents 0 --quant-run runs/quant-full
 
+# Tools: MCP servers + Rust tools, per-agent allowlists and clearance
+cargo run --bin smesh -- tools example > smesh.tools.toml   # starter config
+cargo run --bin smesh -- tools list                         # what each agent may use
+cargo run --bin smesh -- tools call files.list_directory '{"path":"."}'
+cargo run --bin smesh -- tools ask "Where is the offsite, per our files?"
+cargo run --bin smesh -- a2a serve --jev --tools smesh.tools.toml
+
 # Live routing eval against Jev (needs TYPESAFE_API_KEY)
 cargo test -p smesh-agent --test jev_routing_eval -- --ignored --nocapture
 ```
@@ -135,6 +142,11 @@ cargo test -p smesh-agent --test jev_routing_eval -- --ignored --nocapture
 | Remote A2A agents as mesh nodes | `smesh-a2a/src/remote.rs` |
 | Agent-task affinity from plain language | `smesh-agent/src/affinity.rs` |
 | Jev (TypeSafe System One) client | `smesh-agent/src/jev.rs` |
+| Tools: trait, toolbelt (allowlist + clearance), tool loop | `smesh-agent/src/tools/mod.rs` |
+| Tools: MCP servers as tools (official `rmcp` SDK) | `smesh-agent/src/tools/mcp.rs` |
+| Tools: `smesh.tools.toml` config | `smesh-agent/src/tools/config.rs` |
+| OpenRouter function calling (`generate_v2`) | `smesh-agent/src/openrouter.rs` |
+| `smesh tools` CLI | `smesh-cli/src/tools.rs` |
 | Quant: read-only venue allowlist | `smesh-quant/src/http.rs` |
 | Quant: journal vocabulary for visualization | `smesh-quant/src/log.rs` |
 | Quant: hypotheses as decaying signals | `smesh-quant/src/board.rs` |

@@ -109,6 +109,8 @@ pub struct ExecutedTask {
     pub agent_name: String,
     /// What the agent produced.
     pub result: String,
+    /// Tools the agent called on the way, in order.
+    pub tool_calls: Vec<crate::tools::ToolCall>,
 }
 
 /// Why a task could not be executed.
@@ -227,7 +229,7 @@ impl AgentCoordinator {
         let agents: Vec<(NodeId, String)> = self
             .agents
             .iter()
-            .map(|(id, a)| (id.clone(), a.config.capability_text().to_string()))
+            .map(|(id, a)| (id.clone(), a.profile()))
             .collect();
         let judgements = futures::future::join_all(
             agents
@@ -286,6 +288,16 @@ impl AgentCoordinator {
         node_id
     }
 
+    /// Every agent in the mesh.
+    pub fn agents(&self) -> impl Iterator<Item = &LlmAgent> {
+        self.agents.values()
+    }
+
+    /// One agent, by node ID.
+    pub fn agent(&self, node_id: &str) -> Option<&LlmAgent> {
+        self.agents.get(node_id)
+    }
+
     /// The agent whose claim on `task_id` survived settlement, if any.
     pub fn winner_for(&self, task_id: &str) -> Option<NodeId> {
         self.converged_winners()
@@ -331,6 +343,7 @@ impl AgentCoordinator {
                     agent: agent_name.clone(),
                     source,
                 })?;
+        let tool_calls = std::mem::take(&mut agent.last_tool_calls);
         agent.results.push(task);
         self.completed.push(task_id.to_string());
 
@@ -339,6 +352,7 @@ impl AgentCoordinator {
             node_id,
             agent_name,
             result,
+            tool_calls,
         })
     }
 
@@ -511,7 +525,7 @@ impl AgentCoordinator {
                 id: id.clone(),
                 name: agent.name().to_string(),
                 role: format!("{:?}", agent.config.role),
-                capability: agent.config.capability_text().to_string(),
+                capability: agent.profile(),
                 specialties: TaskType::ALL
                     .iter()
                     .filter(|t| agent.skill(**t) >= SPECIALTY_LEVEL)
@@ -869,6 +883,94 @@ mod tests {
 
         assert_eq!(winner_name(&coord, &t).as_deref(), Some("Translator"));
         assert_eq!(winner_name(&coord, &c).as_deref(), Some("Contracts"));
+    }
+
+    #[tokio::test]
+    async fn test_the_agent_holding_the_right_tool_claims_the_task() {
+        use crate::tools::{Effect, Tool, ToolError, ToolOutput, Toolbelt};
+
+        struct Named(&'static str, &'static str, Effect);
+        #[async_trait::async_trait]
+        impl Tool for Named {
+            fn name(&self) -> &str {
+                self.0
+            }
+            fn description(&self) -> &str {
+                self.1
+            }
+            fn input_schema(&self) -> serde_json::Value {
+                serde_json::json!({ "type": "object" })
+            }
+            fn effect(&self) -> Effect {
+                self.2
+            }
+            async fn call(&self, _: serde_json::Value) -> Result<ToolOutput, ToolError> {
+                Ok(ToolOutput::text(""))
+            }
+        }
+
+        // Two agents described identically; only one holds the issue tracker,
+        // and the source rewards the tool's presence in the profile.
+        let mut coord = empty_mesh().with_affinity_source(Arc::new(KeywordAffinity(vec![
+            ("tracker__open_issue", "file a bug", 0.9),
+            ("an engineer", "file a bug", 0.4),
+        ])));
+        let tracker = Toolbelt::new(Effect::Write)
+            .with_tool(Arc::new(Named(
+                "tracker__open_issue",
+                "Open an issue in the tracker.",
+                Effect::Write,
+            )))
+            .unwrap();
+        coord.add_agent(described("Plain", "an engineer"));
+        coord.add_agent(described("Equipped", "an engineer").with_toolbelt(tracker));
+
+        let equipped = coord
+            .agents
+            .values()
+            .find(|a| a.name() == "Equipped")
+            .unwrap();
+        assert!(
+            equipped
+                .profile()
+                .contains("tracker__open_issue (Open an issue in the tracker.)"),
+            "{}",
+            equipped.profile()
+        );
+        assert_eq!(
+            coord
+                .agent_roster()
+                .into_iter()
+                .find(|i| i.name == "Equipped")
+                .unwrap()
+                .capability,
+            equipped.profile(),
+            "peers and Agent Cards see the tools too"
+        );
+
+        let id = coord
+            .add_task_assessed(TaskDefinition::untyped(
+                "Please file a bug about the crash",
+                0.5,
+            ))
+            .await;
+        settle(&mut coord);
+        assert_eq!(winner_name(&coord, &id).as_deref(), Some("Equipped"));
+    }
+
+    #[tokio::test]
+    async fn test_tools_above_clearance_do_not_count_toward_routing() {
+        use crate::tools::{builtin::Now, Effect, Toolbelt};
+        // `Now` is a read tool, so a read clearance shows it ...
+        let shown = described("A", "an assistant").with_toolbelt(
+            Toolbelt::new(Effect::Read)
+                .with_tool(Arc::new(Now))
+                .unwrap(),
+        );
+        assert!(shown.profile().contains("builtin__now"));
+        // ... and an agent with no usable tools reads exactly as before.
+        let none = described("B", "an assistant").with_toolbelt(Toolbelt::new(Effect::Read));
+        assert_eq!(none.profile(), "an assistant");
     }
 
     #[tokio::test]

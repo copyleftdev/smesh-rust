@@ -38,7 +38,7 @@ use futures::channel::mpsc;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use serde_json::{json, Value};
-use smesh_agent::{AgentCoordinator, ExecuteError, RoundTrace};
+use smesh_agent::{AgentCoordinator, CallOutcome, ExecuteError, RoundTrace};
 use tokio::task::AbortHandle;
 use tracing::{info, warn};
 
@@ -213,6 +213,27 @@ async fn run_task(mut coordinator: AgentCoordinator, message: Option<Message>, e
 
     match coordinator.execute_settled(&mesh_task_id).await {
         Ok(done) => {
+            for call in &done.tool_calls {
+                let outcome = match call.outcome {
+                    CallOutcome::Ok => "ok".to_string(),
+                    CallOutcome::Error => format!("failed: {}", short(&call.output)),
+                    CallOutcome::Refused => format!("refused: {}", short(&call.output)),
+                };
+                events.status(
+                    TaskState::Working,
+                    format!("{} called {}: {outcome}", done.agent_name, call.tool),
+                    json!({
+                        "event": "tool_call",
+                        "agent": done.node_id,
+                        "agentName": done.agent_name,
+                        "tool": call.tool,
+                        "effect": call.effect,
+                        "outcome": call.outcome,
+                        "input": call.input,
+                        "durationMs": call.duration_ms,
+                    }),
+                );
+            }
             info!(task = %events.task_id, agent = %done.agent_name, "mesh task completed");
             let smesh =
                 json!({"event": "completed", "agent": done.node_id, "agentName": done.agent_name});
@@ -236,6 +257,16 @@ async fn run_task(mut coordinator: AgentCoordinator, message: Option<Message>, e
                 json!({"event": "error", "reason": e.to_string()}),
             );
         }
+    }
+}
+
+/// A tool's error or refusal, cut to one short line for a status message.
+fn short(text: &str) -> String {
+    let line = text.lines().next().unwrap_or_default();
+    if line.chars().count() > 160 {
+        format!("{}…", line.chars().take(160).collect::<String>())
+    } else {
+        line.to_string()
     }
 }
 

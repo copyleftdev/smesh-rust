@@ -20,6 +20,7 @@ pub mod coordinator;
 pub mod jev;
 pub mod openrouter;
 pub mod streaming;
+pub mod tools;
 
 // Core backend types
 pub use backend::{
@@ -70,3 +71,6 @@ pub use coordinator::{
     ExecuteError, ExecutedTask, RoundTrace, TaskDefinition, SPECIALTY_LEVEL,
 };
 pub use jev::{JevAffinity, JevClient, JevConfig, JevError};
+pub use tools::{
+    run_with_tools, CallOutcome, Effect, Tool, ToolCall, ToolError, ToolOutput, ToolRun, Toolbelt,
+};

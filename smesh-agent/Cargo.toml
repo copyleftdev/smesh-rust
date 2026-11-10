@@ -17,3 +17,8 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 uuid = { workspace = true }
+rmcp = { version = "3.9.0", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "transport-async-rw"] }
+toml = "0.8"
+
+[dev-dependencies]
+rmcp = { version = "3.9.0", default-features = false, features = ["server", "client", "transport-async-rw"] }

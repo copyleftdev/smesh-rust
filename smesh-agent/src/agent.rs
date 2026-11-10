@@ -10,6 +10,7 @@ use tracing::{debug, info};
 
 use crate::backend::{LlmBackend, LlmError};
 use crate::openrouter::{OpenRouterClient, OpenRouterConfig};
+use crate::tools::{run_with_tools, ToolCall, Toolbelt};
 use smesh_core::{Node, Signal};
 
 /// Agent roles that determine skills and behavior
@@ -296,7 +297,14 @@ pub struct LlmAgent {
     /// from an affinity source. It takes precedence over the role table, and
     /// is what lets an agent claim a task that has no built-in type.
     pub assessed: HashMap<String, f64>,
+    /// Tools this agent may call, and how far it may go with them.
+    toolbelt: Option<Toolbelt>,
+    /// Tool calls made while executing the most recent task.
+    pub last_tool_calls: Vec<ToolCall>,
 }
+
+/// Most model turns an agent spends calling tools on one task.
+pub const MAX_TOOL_TURNS: usize = 8;
 
 impl LlmAgent {
     /// Create a new LLM agent with a specific backend
@@ -313,6 +321,31 @@ impl LlmAgent {
             results: Vec::new(),
             llm_calls: 0,
             assessed: HashMap::new(),
+            toolbelt: None,
+            last_tool_calls: Vec::new(),
+        }
+    }
+
+    /// Give this agent tools. They count toward which tasks it suits (see
+    /// [`profile`](Self::profile)) and it calls them while executing.
+    pub fn with_toolbelt(mut self, toolbelt: Toolbelt) -> Self {
+        self.toolbelt = Some(toolbelt.for_agent(&self.config.name));
+        self
+    }
+
+    /// This agent's tools, if it has any.
+    pub fn toolbelt(&self) -> Option<&Toolbelt> {
+        self.toolbelt.as_ref()
+    }
+
+    /// What this agent does and the tools it can use, in plain language.
+    /// This is what an affinity source judges it on, so an agent holding the
+    /// right tools for a task is the one that claims it.
+    pub fn profile(&self) -> String {
+        let capability = self.config.capability_text();
+        match self.toolbelt.as_ref().map(Toolbelt::describe) {
+            Some(tools) if !tools.is_empty() => format!("{capability}. {tools}"),
+            _ => capability.to_string(),
         }
     }
 
@@ -432,8 +465,30 @@ impl LlmAgent {
 
         debug!("Agent {} executing task {}", self.config.name, task.id);
 
-        let result = self.backend.generate_with_system(&prompt, &system).await?;
-        self.llm_calls += 1;
+        self.last_tool_calls.clear();
+        let tools = self
+            .toolbelt
+            .as_ref()
+            .filter(|b| b.has_usable() && self.backend.supports_tools());
+        let result = match tools {
+            Some(belt) => {
+                let run = run_with_tools(
+                    self.backend.as_ref(),
+                    &system,
+                    &prompt,
+                    belt,
+                    MAX_TOOL_TURNS,
+                )
+                .await?;
+                self.llm_calls += run.turns as u64;
+                self.last_tool_calls = run.calls;
+                run.text
+            }
+            None => {
+                self.llm_calls += 1;
+                self.backend.generate_with_system(&prompt, &system).await?
+            }
+        };
 
         task.status = TaskStatus::Completed;
         task.result = Some(result.clone());

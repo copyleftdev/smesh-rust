@@ -117,6 +117,42 @@ smesh a2a card http://127.0.0.1:7410          # its Agent Card, signed when serv
 smesh a2a serve --agents 0 --recruit http://other-agent:9000
 ```
 
+### Agents with tools
+
+Give agents tools from any [MCP](https://modelcontextprotocol.io) server, or write them in Rust.
+Each agent gets its own allowlist and a **clearance** (`read` < `write` < `execute`): a tool above
+it is never offered to the agent and never run for it. An agent's tools count toward which tasks
+it suits, so the agent holding the right tool is the one that claims the task. Every call is
+journaled, and over A2A each call is reported as a status update.
+
+```bash
+smesh tools example > smesh.tools.toml   # a starter config: servers, agents, clearances
+smesh tools list                         # what each agent may use, and what its clearance hides
+smesh tools ask "How many days until the offsite in our files, and where is it?"
+#   → Scribe takes it
+#     ✓ files__search_files {"path":".","pattern":"**/*offsite*"}
+#     ✓ files__read_text_file {"path":"…/offsite.md"}
+#     ✓ builtin__now {}
+#   24 days (2026-12-04), at the greenhouse on Pier 3.
+
+smesh a2a serve --jev --tools smesh.tools.toml   # the same agents, behind one A2A endpoint
+```
+
+```toml
+[servers.files]                  # an MCP server over stdio; `url = "…"` for streamable HTTP
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
+
+[[agents]]
+name = "Librarian"
+capability = "a librarian who answers questions from the files in this directory"
+tools = ["files.read_*", "files.list_*", "builtin.now"]
+clearance = "read"               # the default; unannotated MCP tools count as write
+```
+
+Agents with tools default to `openai/gpt-5-mini` (set `model` per agent): in live runs, lighter
+models guessed file names or wrote summaries of files they never opened.
+
 ### A read-only research mesh
 
 ```bash
@@ -160,14 +196,14 @@ with a different key. Pins reset when a node restarts.
 |---|---|
 | [`smesh-core`](smesh-core) | Signals, nodes, fields, network topologies, Bayesian trust |
 | [`smesh-runtime`](smesh-runtime) | The QUIC peer-to-peer mesh, with signed attestation |
-| [`smesh-agent`](smesh-agent) | LLM backends (OpenRouter, Claude), constitutional checks, Jev routing |
+| [`smesh-agent`](smesh-agent) | LLM backends (OpenRouter, Claude), Jev routing, tools (MCP + Rust) with clearance gates |
 | [`smesh-a2a`](smesh-a2a) | The mesh as an A2A v1.0 agent; remote A2A agents as members; signed Agent Cards |
 | [`smesh-quant`](smesh-quant) | The read-only research mesh, its journal and the site export |
 | [`smesh-world`](smesh-world) · [`smesh-refinery`](smesh-refinery) · [`smesh-ratify`](smesh-ratify) | Signed organizational world models, with a human as merge authority ([design](WORLD-MODEL.md)) |
 | [`smesh-bounty`](smesh-bounty) | Security swarms with agentic tool execution |
 | [`smesh-cli`](smesh-cli) | The `smesh` binary |
 
-404 tests pass across the workspace (`cargo test --workspace`); one live evaluation against
+428 tests pass across the workspace (`cargo test --workspace`); one live evaluation against
 Jev is `#[ignore]`d and runs on demand.
 
 ## How it differs from an orchestrator
