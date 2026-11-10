@@ -15,6 +15,7 @@ smesh-rust/
 ├── smesh-core/      # Signals, nodes, fields, networks (core primitives)
 ├── smesh-runtime/   # QUIC P2P networking via Quinn
 ├── smesh-agent/     # LLM backends (OpenRouter + Claude), Constitutional AI
+├── smesh-a2a/       # A2A v1.0: mesh as an A2A server, remote A2A agents as mesh nodes
 └── smesh-cli/       # CLI tools, benchmarks, code review, threat analysis
 ```
 
@@ -34,7 +35,7 @@ smesh-rust/
 # Build (release optimized with LTO)
 cargo build --release
 
-# Run all tests (104 tests)
+# Run all tests (332 tests)
 cargo test --workspace
 
 # Run specific crate tests
@@ -75,6 +76,11 @@ cargo run --bin smesh -- review --path ./some-repo --model qwen2.5-coder:7b
 
 # Threat intelligence analysis
 cargo run --bin smesh -- threat --path ./payloads --limit 20
+
+# Serve the mesh as an A2A v1.0 agent (optionally recruiting remote A2A agents)
+cargo run --bin smesh -- a2a serve --listen 127.0.0.1:7410 --recruit http://other-agent
+cargo run --bin smesh -- a2a send --url http://127.0.0.1:7410 -t code_review "Review ..."
+cargo run --bin smesh -- a2a card http://127.0.0.1:7410
 ```
 
 ## Code Style
@@ -106,6 +112,8 @@ cargo run --bin smesh -- threat --path ./payloads --limit 20
 | OpenRouter client | `smesh-agent/src/openrouter.rs` |
 | Constitutional AI | `smesh-agent/src/constitutional.rs` |
 | CLI entry point | `smesh-cli/src/main.rs` |
+| A2A gateway (task ↔ signal lifecycle) | `smesh-a2a/src/gateway.rs` |
+| Remote A2A agents as mesh nodes | `smesh-a2a/src/remote.rs` |
 
 ## Performance Targets
 

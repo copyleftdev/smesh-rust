@@ -32,12 +32,13 @@ jobs:
       - name: Format
         # Scoped to the crates this workflow is responsible for. The older CLI
         # modules predate it and are not reformatted as a side effect of CI.
-        run: cargo fmt -p smesh-core -p smesh-runtime -- --check
+        run: cargo fmt -p smesh-core -p smesh-runtime -p smesh-a2a -- --check
 
       - name: Clippy
         run: |
           cargo clippy -p smesh-core --lib -- -D warnings
           cargo clippy -p smesh-runtime --lib --tests -- -D warnings
+          cargo clippy -p smesh-a2a --lib --tests -- -D warnings
 
       - name: Test
         run: cargo test --workspace

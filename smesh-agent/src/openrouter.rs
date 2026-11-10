@@ -488,8 +488,12 @@ fn candidate_env_files() -> Vec<std::path::PathBuf> {
     paths
 }
 
+/// The value of `key` in a dotenv file. A key assigned more than once takes
+/// its last value, as `source` and dotenv loaders do: a file with an old key
+/// above a new one means the new one.
 fn read_key_from_file(path: &std::path::Path, key: &str) -> Option<String> {
     let contents = std::fs::read_to_string(path).ok()?;
+    let mut found = None;
     for line in contents.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -498,11 +502,11 @@ fn read_key_from_file(path: &std::path::Path, key: &str) -> Option<String> {
         let line = line.strip_prefix("export ").unwrap_or(line);
         if let Some((k, v)) = line.split_once('=') {
             if k.trim() == key {
-                return Some(unquote(v.trim()));
+                found = Some(unquote(v.trim()));
             }
         }
     }
-    None
+    found
 }
 
 fn unquote(value: &str) -> String {
@@ -570,6 +574,23 @@ mod tests {
             Some("google/gemini-2.5-flash-lite".to_string())
         );
         assert_eq!(read_key_from_file(&path, "NOT_PRESENT"), None);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_read_key_from_file_last_assignment_wins() {
+        let path = std::env::temp_dir().join("smesh_openrouter_last_wins_test.env");
+        std::fs::write(
+            &path,
+            "OPENROUTER_API_KEY=sk-or-old\nOTHER=x\nOPENROUTER_API_KEY=sk-or-new\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            read_key_from_file(&path, "OPENROUTER_API_KEY"),
+            Some("sk-or-new".to_string())
+        );
 
         let _ = std::fs::remove_file(&path);
     }
