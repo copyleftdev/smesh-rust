@@ -11,6 +11,10 @@
 <meta property="og:title" content="SMESH: consensus without a center">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://copyleftdev.github.io/smesh-rust/">
+<meta property="og:image" content="https://copyleftdev.github.io/smesh-rust/assets/og.png">
+<meta property="og:image:width" content="1200"><meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="SMESH: consensus, without a center. A replay of agents reaching consensus on a shared field.">
+<meta name="twitter:card" content="summary_large_image">
 <meta property="og:description" content="Agents don't vote. Evidence reinforces, doubt decays, and what survives is the answer. A recorded quant research run, replayed.">
 <link rel="alternate" type="text/markdown" href="index.md" title="SMESH in Markdown">
 <link rel="describedby" href="llms.txt" type="text/plain">
@@ -26,7 +30,7 @@
 <a class="skip" href="#main">Skip to content</a>
 <header class="masthead wrap">
 <a class="brand" href="#" aria-label="SMESH home"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M4 25C9 24 11 17 16 15s9-3 12-9M4 25c8 1 13-2 16-6M16 15c4 3 7 7 12 10"/><circle cx="16" cy="15" r="2"/><circle cx="4" cy="25" r="1.4"/><circle cx="28" cy="6" r="1.4"/><circle cx="28" cy="25" r="1.4"/></svg><span>smesh<span class="brand-light"> / mesh</span></span></a>
-<nav aria-label="Main navigation"><a href="#mechanism">The mechanism</a><a href="#study">The study</a><a href="#ask">Ask the mesh</a><a class="nav-github" href="https://github.com/copyleftdev/smesh-rust">GitHub <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 16 16 4M5 4h11v11"/></svg></a></nav>
+<nav aria-label="Main navigation"><a href="#mechanism">The mechanism</a><a href="#study">The study</a><a href="#ask">Ask the mesh</a><a href="#build">Build</a><a class="nav-github" href="https://github.com/copyleftdev/smesh-rust">GitHub <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 16 16 4M5 4h11v11"/></svg></a></nav>
 </header>
 <main id="main">
 <section class="hero wrap" aria-labelledby="hero-title">
@@ -77,6 +81,29 @@
 [Working] round 2: Quant backs off</span>
 <span class="ok">a evidência decide</span>
 <span class="dim">[Completed] completed by Translator</span></pre><p class="terminal-note">Recorded against the live gateway, abridged. Jev's claim strengths shown as recorded; settlement, not Jev, picks the winner.</p></div></div></section>
+
+<section id="build" class="build wrap" aria-labelledby="build-title"><div class="section-lead"><h2 id="build-title">One workspace.<br><span>The study is one use of it.</span></h2><p>A Rust workspace and a single <code>smesh</code> binary.<br>Signals at the core; agents, transport and research on top.</p></div>
+<div class="build-body"><div class="terminal" aria-label="Quick start"><pre><span class="dim"># build, then watch signals settle with no LLM and no key</span>
+<span class="dim">$</span> git clone https://github.com/copyleftdev/smesh-rust
+<span class="dim">$</span> cd smesh-rust &amp;&amp; cargo build --release
+<span class="dim">$</span> cargo run --release --bin smesh -- sim --nodes 50 --ticks 100
+
+<span class="dim"># the mesh as one A2A v1.0 agent; agents in plain language</span>
+<span class="dim">$</span> smesh a2a serve --jev \
+    --agent "Contracts=a reviewer of commercial contracts"
+
+<span class="dim"># re-run this study (read-only market data)</span>
+<span class="dim">$</span> smesh quant run --track both
+<span class="dim">$</span> smesh quant export-site --run runs/quant-&lt;ts&gt; --out site/data</pre></div>
+<ul class="crate-list">
+<li><a href="https://github.com/copyleftdev/smesh-rust/tree/main/smesh-core"><code>smesh-core</code><span>Signals, nodes, fields, network topologies, Bayesian trust.</span></a></li>
+<li><a href="https://github.com/copyleftdev/smesh-rust/tree/main/smesh-runtime"><code>smesh-runtime</code><span>A live peer-to-peer mesh over QUIC, with signed attestation.</span></a></li>
+<li><a href="https://github.com/copyleftdev/smesh-rust/tree/main/smesh-agent"><code>smesh-agent</code><span>LLM agents on OpenRouter or Claude; plain-language routing with Jev.</span></a></li>
+<li><a href="https://github.com/copyleftdev/smesh-rust/tree/main/smesh-a2a"><code>smesh-a2a</code><span>The mesh as an A2A v1.0 agent, with signed Agent Cards.</span></a></li>
+<li><a href="https://github.com/copyleftdev/smesh-rust/tree/main/smesh-quant"><code>smesh-quant</code><span>The read-only research mesh replayed above.</span></a></li>
+<li><a href="https://github.com/copyleftdev/smesh-rust/blob/main/WORLD-MODEL.md"><b><code>smesh-world</code><br><code>smesh-refinery</code><br><code>smesh-ratify</code></b><span>Signed organizational world models, with a human as merge authority.</span></a></li>
+<li><a href="https://github.com/copyleftdev/smesh-rust/tree/main/smesh-bounty"><code>smesh-bounty</code><span>Security swarms with agentic tool execution, for authorized testing.</span></a></li>
+</ul></div></section>
 
 <section class="closing wrap"><div class="closing-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M4 25C9 24 11 17 16 15s9-3 12-9M4 25c8 1 13-2 16-6M16 15c4 3 7 7 12 10"/><circle cx="16" cy="15" r="2"/></svg></div><h2>Let the evidence<br>decide.</h2><a class="button" href="https://github.com/copyleftdev/smesh-rust">Build with SMESH <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 10h14m-5-5 5 5-5 5"/></svg></a><p>Open source. Rust. MIT / Apache-2.0.</p></section>
 </main><footer class="wrap"><span>SMESH <span class="muted">by copyleftdev</span></span><p>Independent of TypeSafe AI, Kalshi, Massive and Kraken. Research, not trading advice.</p><a href="llms.txt">Agent guide</a><a href="https://github.com/copyleftdev/smesh-rust">Source</a></footer>
