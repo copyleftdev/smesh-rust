@@ -1,15 +1,16 @@
 //! Turning an incoming A2A message into a mesh task.
 //!
-//! An A2A message carries free text and optional structured parts; the mesh
-//! needs a task type, because the task type is what agents claim on. The type
-//! is taken from the most explicit source available:
+//! The task is the message's text; the mesh's agents decide from it whether
+//! they suit it (see `smesh_agent::AffinitySource`). A task type is only an
+//! optional label, taken from the most explicit source available:
 //!
 //! 1. `taskType` in the message metadata,
 //! 2. `taskType` in a data part,
-//! 3. keywords in the text.
+//! 3. keywords in the text, for the five built-in software types.
 //!
-//! The keyword rule is a fallback for clients that know nothing of SMESH. It is
-//! deliberately simple and deterministic, so a client can predict it.
+//! The label matters only to agents with no assessment to go on, which fall
+//! back to their role tables; any label is accepted. The keyword rule is that
+//! offline fallback, deliberately simple and deterministic.
 
 use a2a::{Message, PartContent};
 use serde_json::Value;
@@ -29,13 +30,14 @@ pub enum ClassifyError {
     /// The message has no text to work on.
     #[error("message has no text part")]
     NoText,
-    /// The client named a task type the mesh does not have.
-    #[error("unknown task type {0:?}; expected one of code_write, code_review, testing, documentation, analysis")]
-    UnknownTaskType(String),
 }
 
 /// Build the mesh task for an A2A message.
-pub fn task_from_message(message: &Message) -> Result<TaskDefinition, ClassifyError> {
+///
+/// With `infer` false, a message that names no type gets no label rather than
+/// a keyword guess: right for a mesh whose agents assess tasks themselves,
+/// where a software label on a translation request would only mislead.
+pub fn task_from_message(message: &Message, infer: bool) -> Result<TaskDefinition, ClassifyError> {
     let text = message_text(message).ok_or(ClassifyError::NoText)?;
 
     let explicit = message
@@ -46,10 +48,9 @@ pub fn task_from_message(message: &Message) -> Result<TaskDefinition, ClassifyEr
         .and_then(Value::as_str);
 
     let task_type = match explicit {
-        Some(name) => name
-            .parse::<TaskType>()
-            .map_err(|_| ClassifyError::UnknownTaskType(name.to_string()))?,
-        None => infer_task_type(&text),
+        Some(label) => label.to_string(),
+        None if infer => infer_task_type(&text).as_str().to_string(),
+        None => String::new(),
     };
 
     let priority = message
@@ -62,7 +63,7 @@ pub fn task_from_message(message: &Message) -> Result<TaskDefinition, ClassifyEr
         .unwrap_or(DEFAULT_PRIORITY);
 
     Ok(TaskDefinition {
-        task_type: task_type.as_str().to_string(),
+        task_type,
         description: text,
         priority,
     })
@@ -129,7 +130,10 @@ mod tests {
             TASK_TYPE_KEY.to_string(),
             Value::from("documentation"),
         )]));
-        assert_eq!(task_from_message(&m).unwrap().task_type, "documentation");
+        assert_eq!(
+            task_from_message(&m, true).unwrap().task_type,
+            "documentation"
+        );
     }
 
     #[test]
@@ -138,28 +142,32 @@ mod tests {
             Part::text("anything"),
             Part::data(serde_json::json!({"taskType": "testing", "priority": 0.9})),
         ]);
-        let task = task_from_message(&m).unwrap();
+        let task = task_from_message(&m, true).unwrap();
         assert_eq!(task.task_type, "testing");
         assert_eq!(task.priority, 0.9);
     }
 
     #[test]
-    fn test_unknown_task_type_is_an_error_not_a_guess() {
+    fn test_any_task_type_label_is_kept_as_given() {
+        // Not one of the built-in types: a label for any domain, not an error.
         let mut m = msg(vec![Part::text("x")]);
         m.metadata = Some(HashMap::from([(
             TASK_TYPE_KEY.to_string(),
-            Value::from("poetry"),
+            Value::from("translation"),
         )]));
         assert_eq!(
-            task_from_message(&m).unwrap_err(),
-            ClassifyError::UnknownTaskType("poetry".into())
+            task_from_message(&m, true).unwrap().task_type,
+            "translation"
         );
     }
 
     #[test]
     fn test_message_without_text_is_rejected() {
         let m = msg(vec![Part::data(serde_json::json!({"taskType": "testing"}))]);
-        assert_eq!(task_from_message(&m).unwrap_err(), ClassifyError::NoText);
+        assert_eq!(
+            task_from_message(&m, true).unwrap_err(),
+            ClassifyError::NoText
+        );
     }
 
     #[test]
@@ -169,7 +177,7 @@ mod tests {
             PRIORITY_KEY.to_string(),
             Value::from(7.0),
         )]));
-        assert_eq!(task_from_message(&m).unwrap().priority, 1.0);
+        assert_eq!(task_from_message(&m, true).unwrap().priority, 1.0);
     }
 
     #[test]
@@ -188,5 +196,21 @@ mod tests {
     fn test_text_parts_are_joined() {
         let m = msg(vec![Part::text("a"), Part::text("b")]);
         assert_eq!(message_text(&m).as_deref(), Some("a\n\nb"));
+    }
+
+    #[test]
+    fn test_no_guess_when_inference_is_off() {
+        let m = msg(vec![Part::text("Review my PR")]);
+        assert_eq!(task_from_message(&m, false).unwrap().task_type, "");
+        // An explicit label is still kept.
+        let mut m = msg(vec![Part::text("Review my PR")]);
+        m.metadata = Some(HashMap::from([(
+            TASK_TYPE_KEY.to_string(),
+            Value::from("code_review"),
+        )]));
+        assert_eq!(
+            task_from_message(&m, false).unwrap().task_type,
+            "code_review"
+        );
     }
 }

@@ -21,8 +21,8 @@ use smesh_a2a::{
     RemoteAgentOptions, RemoteError,
 };
 use smesh_agent::{
-    AgentCoordinator, AgentRole, CoordinatorConfig, GenerateRequest, GenerateResponse, LlmBackend,
-    LlmError, LlmProvider, TaskDefinition,
+    AffinitySource, AgentConfig, AgentCoordinator, AgentRole, CoordinatorConfig, GenerateRequest,
+    GenerateResponse, LlmAgent, LlmBackend, LlmError, LlmProvider, TaskDefinition,
 };
 
 /// Answers every prompt with `"<tag>: <first line of the task description>"`,
@@ -107,7 +107,8 @@ fn factory(roles: Vec<AgentRole>, tag: &'static str, fail: bool) -> CoordinatorF
 async fn spawn_gateway(factory: CoordinatorFactory, sign_with: Option<&SigningKey>) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    let mut card = mesh_card(&MeshCardConfig::new(base.clone()));
+    let roster = factory().agent_roster();
+    let mut card = mesh_card(&MeshCardConfig::new(base.clone()), &roster);
     if let Some(key) = sign_with {
         sign_card(&mut card, key);
     }
@@ -166,7 +167,10 @@ async fn test_gateway_serves_a_v1_agent_card() {
     let card = AgentCardResolver::new(None).resolve(&base).await.unwrap();
     assert_eq!(card.name, "SMESH mesh");
     assert_eq!(card.supported_interfaces.len(), 2);
-    assert!(card.skills.iter().any(|s| s.id == "code_review"));
+    // One skill per agent, in the agent's own words.
+    assert_eq!(card.skills.len(), 1);
+    assert_eq!(card.skills[0].id, "coder-1");
+    assert_eq!(card.skills[0].description, "an expert software developer");
 }
 
 #[tokio::test]
@@ -256,10 +260,98 @@ async fn test_backend_failure_fails_the_task() {
 }
 
 #[tokio::test]
-async fn test_unknown_task_type_fails_with_a_reason() {
+async fn test_label_no_role_knows_is_rejected_without_an_assessment() {
+    // Any label is accepted, but with no affinity source a role table only
+    // knows the built-in types, so nobody claims it.
     let base = spawn_gateway(factory(vec![AgentRole::Coder], "local", false), None).await;
     let task = send(&base, "x", Some("poetry")).await;
-    assert_eq!(task.status.state, TaskState::Failed);
+    assert_eq!(task.status.state, TaskState::Rejected);
+}
+
+/// Says an agent suits a task when the task mentions a word tied to the
+/// agent's capability. Stands in for Jev without the network.
+struct KeywordAffinity;
+
+#[async_trait]
+impl AffinitySource for KeywordAffinity {
+    async fn assess(&self, task: &TaskDefinition, capability: &str) -> Option<f64> {
+        let task = task.description.to_lowercase();
+        let fits = [("translator", "translate"), ("contracts", "clause")]
+            .iter()
+            .any(|(cap, word)| capability.contains(cap) && task.contains(word));
+        Some(if fits { 0.95 } else { 0.05 })
+    }
+}
+
+/// A mesh of agents described in plain language, outside software entirely.
+fn open_domain_factory() -> CoordinatorFactory {
+    Arc::new(|| {
+        let mut coordinator = AgentCoordinator::new(
+            CoordinatorConfig {
+                n_agents: 0,
+                ..CoordinatorConfig::default()
+            },
+            Box::new(|| {
+                Arc::new(Fake {
+                    tag: "unused",
+                    fail: false,
+                })
+            }),
+        )
+        .with_affinity_source(Arc::new(KeywordAffinity));
+        for (name, capability, tag) in [
+            (
+                "Translator",
+                "a translator between English and Portuguese",
+                "translator",
+            ),
+            (
+                "Contracts",
+                "a reviewer of commercial contracts",
+                "contracts",
+            ),
+        ] {
+            coordinator.add_agent(LlmAgent::new(
+                AgentConfig::new(name, AgentRole::General).with_capability(capability),
+                Arc::new(Fake { tag, fail: false }),
+            ));
+        }
+        coordinator
+    })
+}
+
+#[tokio::test]
+async fn test_open_domain_mesh_advertises_and_routes_by_capability() {
+    let base = spawn_gateway(open_domain_factory(), None).await;
+
+    let card = AgentCardResolver::new(None).resolve(&base).await.unwrap();
+    let skills: Vec<_> = card.skills.iter().map(|s| s.description.as_str()).collect();
+    assert!(skills.contains(&"a translator between English and Portuguese"));
+    assert!(skills.contains(&"a reviewer of commercial contracts"));
+
+    let task = send(&base, "Translate our refund policy into Portuguese", None).await;
+    assert_eq!(task.status.state, TaskState::Completed);
+    assert!(
+        artifact_text(&task).starts_with("translator: "),
+        "{}",
+        artifact_text(&task)
+    );
+
+    let task = send(&base, "Is the auto-renewal clause one-sided?", None).await;
+    assert_eq!(task.status.state, TaskState::Completed);
+    assert!(
+        artifact_text(&task).starts_with("contracts: "),
+        "{}",
+        artifact_text(&task)
+    );
+}
+
+#[tokio::test]
+async fn test_open_domain_task_no_agent_suits_is_rejected() {
+    let base = spawn_gateway(open_domain_factory(), None).await;
+    let task = send(&base, "Bake me a sourdough loaf", None).await;
+    assert_eq!(task.status.state, TaskState::Rejected);
+    assert!(task.artifacts.is_none());
 }
 
 /// Run one task on a coordinator holding `local` agents plus a remote agent.

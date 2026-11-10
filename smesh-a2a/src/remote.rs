@@ -3,10 +3,12 @@
 //! A remote agent joins the mesh as an ordinary [`LlmAgent`] whose backend is
 //! an A2A client. Two things come from its Agent Card:
 //!
-//! - **Affinity.** Each card skill whose id or tags name a task type gives the
-//!   agent a skill level for that type. The agent then claims, competes and
-//!   backs off in settlement exactly like a local agent. A task type no skill
-//!   names gets no level, so the agent never claims it.
+//! - **Capability.** The card's description and skill descriptions become the
+//!   agent's plain-language capability, which an affinity source judges it
+//!   on, so a remote agent can be of any kind. With no affinity source, each
+//!   card skill whose id or tags name a built-in task type gives the agent a
+//!   role-table level for that type instead. Either way the agent then claims,
+//!   competes and backs off in settlement exactly like a local agent.
 //! - **Transport.** The SDK's client negotiates a binding from the card's
 //!   `supportedInterfaces`.
 //!
@@ -83,6 +85,17 @@ pub fn affinities_from_card(card: &AgentCard, level: f64) -> HashMap<TaskType, f
         })
         .map(|t| (*t, level))
         .collect()
+}
+
+/// What a remote agent does, in plain language, from its card: its own
+/// description and each skill's. This is what an affinity source judges it
+/// on, so the agent can be of any kind its card says.
+pub fn capability_from_card(card: &AgentCard) -> String {
+    let mut text = format!("{}: {}", card.name, card.description.trim());
+    for skill in &card.skills {
+        text.push_str(&format!("\n- {}: {}", skill.name, skill.description.trim()));
+    }
+    text
 }
 
 /// Which cards to accept on discovery.
@@ -345,6 +358,7 @@ impl RemoteAgent {
             openrouter: None,
             ..AgentConfig::default()
         }
+        .with_capability(capability_from_card(&self.card))
         .with_skill_overrides(
             // Every type is listed so the role's defaults never leak in: a type
             // the card does not cover gets 0.0, below any claim threshold.
@@ -363,7 +377,7 @@ mod tests {
     use a2a::{Artifact, TaskStatus};
 
     fn card_with(skills: &[(&str, &[&str])]) -> AgentCard {
-        let mut card = crate::card::mesh_card(&crate::card::MeshCardConfig::new("http://x"));
+        let mut card = crate::card::mesh_card(&crate::card::MeshCardConfig::new("http://x"), &[]);
         card.skills = skills
             .iter()
             .map(|(id, tags)| a2a::AgentSkill {
@@ -453,5 +467,18 @@ mod tests {
     fn test_input_required_is_not_treated_as_success() {
         let t = task(TaskState::InputRequired, None, Some("which repo?"));
         assert!(matches!(outcome(&t), Err(LlmError::UnsupportedFeature(_))));
+    }
+
+    #[test]
+    fn test_capability_from_card_uses_the_cards_own_words() {
+        let mut card = card_with(&[("x", &[])]);
+        card.name = "Lisbon Translations".into();
+        card.description = "Professional translation.".into();
+        card.skills[0].name = "EN-PT".into();
+        card.skills[0].description = "English to European Portuguese".into();
+        assert_eq!(
+            capability_from_card(&card),
+            "Lisbon Translations: Professional translation.\n- EN-PT: English to European Portuguese"
+        );
     }
 }

@@ -6,7 +6,7 @@
 //! | A2A state   | Mesh event                                                   |
 //! |-------------|--------------------------------------------------------------|
 //! | `SUBMITTED` | Request accepted (set by the SDK before the executor runs)   |
-//! | `WORKING`   | `task_available` emitted; one update per settlement round     |
+//! | `WORKING`   | Agents assessed; `task_available` emitted; one update a round |
 //! | `WORKING`   | Settled: the surviving claimant starts executing             |
 //! | `COMPLETED` | The winner's output is attached as an artifact               |
 //! | `REJECTED`  | Settlement ended with no claim: no agent had the affinity     |
@@ -137,7 +137,8 @@ async fn run_task(mut coordinator: AgentCoordinator, message: Option<Message>, e
         );
         return;
     };
-    let task = match task_from_message(&message) {
+    // A mesh whose agents assess tasks needs no guessed software label.
+    let task = match task_from_message(&message, !coordinator.has_affinity_source()) {
         Ok(task) => task,
         Err(e) => {
             events.status(
@@ -150,10 +151,15 @@ async fn run_task(mut coordinator: AgentCoordinator, message: Option<Message>, e
     };
 
     let task_type = task.task_type.clone();
-    let mesh_task_id = coordinator.add_task(task);
+    let mesh_task_id = coordinator.add_task_assessed(task).await;
+    let label = if task_type.is_empty() {
+        String::new()
+    } else {
+        format!(" ({task_type})")
+    };
     events.status(
         TaskState::Working,
-        format!("task_available emitted as {task_type}"),
+        format!("task_available emitted{label}"),
         json!({"event": "task_available", "meshTaskId": mesh_task_id, "taskType": task_type}),
     );
 
@@ -194,7 +200,7 @@ async fn run_task(mut coordinator: AgentCoordinator, message: Option<Message>, e
     let Some(winner) = coordinator.winner_for(&mesh_task_id) else {
         events.status(
             TaskState::Rejected,
-            format!("no agent claimed this {task_type} task"),
+            "no agent in the mesh suits this task".to_string(),
             json!({"event": "unclaimed", "meshTaskId": mesh_task_id}),
         );
         return;
@@ -219,7 +225,7 @@ async fn run_task(mut coordinator: AgentCoordinator, message: Option<Message>, e
         }
         Err(ExecuteError::Unclaimed(_)) => events.status(
             TaskState::Rejected,
-            format!("no agent claimed this {task_type} task"),
+            "no agent in the mesh suits this task".to_string(),
             json!({"event": "unclaimed", "meshTaskId": mesh_task_id}),
         ),
         Err(e) => {
