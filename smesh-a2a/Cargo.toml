@@ -1,0 +1,25 @@
+[package]
+name = "smesh-a2a"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "A2A (Agent2Agent) v1.0 gateway and remote-agent bridge for SMESH"
+
+[dependencies]
+smesh-core = { path = "../smesh-core" }
+smesh-agent = { path = "../smesh-agent" }
+a2a = { package = "a2a-lf", version = "0.4.2" }
+a2a-server = { package = "a2a-server-lf", version = "0.5.3" }
+a2a-client = { package = "a2a-client-lf", version = "0.2.9" }
+axum = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+ed25519-dalek = { workspace = true }
+base64 = "0.22"

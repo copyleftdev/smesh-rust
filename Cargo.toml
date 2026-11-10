@@ -9,6 +9,7 @@ members = [
     "smesh-world",
     "smesh-refinery",
     "smesh-ratify",
+    "smesh-a2a",
 ]
 
 [workspace.package]

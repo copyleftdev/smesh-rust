@@ -13,6 +13,7 @@ use smesh_agent::{
 use smesh_core::{Network, NetworkTopology, Node, Signal, SignalType};
 use smesh_runtime::{MeshConfig, RuntimeConfig, RuntimeEvent, SmeshRuntime};
 
+mod a2a;
 mod adjudicate;
 mod analysis;
 mod owasp;
@@ -53,6 +54,10 @@ enum Commands {
         #[arg(short = 'k', long, default_value = "100")]
         ticks: u64,
     },
+
+    /// Serve the mesh over A2A (Agent2Agent) v1.0, or talk to A2A agents
+    #[command(subcommand)]
+    A2a(a2a::A2aCommand),
 
     /// Run LLM agent coordination demo
     Agents {
@@ -414,6 +419,7 @@ async fn main() -> Result<()> {
             topology,
             ticks,
         } => cmd_sim(nodes, &topology, ticks).await,
+        Commands::A2a(command) => a2a::run(command).await,
         Commands::Agents {
             agents,
             model,
