@@ -77,7 +77,7 @@ pub fn mesh_card(config: &MeshCardConfig, roster: &[AgentInfo]) -> AgentCard {
         },
         default_input_modes: vec!["text/plain".into(), "application/json".into()],
         default_output_modes: vec!["text/plain".into()],
-        skills: roster.iter().map(skill_for).collect(),
+        skills: unique_ids(roster.iter().map(skill_for).collect()),
         provider: None,
         documentation_url: None,
         icon_url: None,
@@ -87,12 +87,31 @@ pub fn mesh_card(config: &MeshCardConfig, roster: &[AgentInfo]) -> AgentCard {
     }
 }
 
+/// Make skill IDs unique, suffixing a repeat with its position (and further
+/// if that is taken too). Different names can still slug to the same ID, as
+/// `a2a:Foo` and `a2a-Foo` do, and a client that keys skills by ID would see
+/// only one of those agents.
+fn unique_ids(mut skills: Vec<AgentSkill>) -> Vec<AgentSkill> {
+    let mut seen = std::collections::HashSet::new();
+    for (i, skill) in skills.iter_mut().enumerate() {
+        let base = skill.id.clone();
+        let mut n = i + 1;
+        while !seen.insert(skill.id.clone()) {
+            skill.id = format!("{base}-{n}");
+            n += 1;
+        }
+    }
+    skills
+}
+
 fn skill_for(agent: &AgentInfo) -> AgentSkill {
     let id: String = agent
         .name
         .to_lowercase()
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        // Letters and digits in any script: an ASCII-only rule turned every
+        // name written in, say, Japanese into the same run of dashes.
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
         .collect();
     AgentSkill {
         id,
@@ -305,6 +324,28 @@ mod tests {
                 specialties: vec!["code_write".into(), "testing".into()],
             },
         ]
+    }
+
+    fn agent(name: &str) -> AgentInfo {
+        AgentInfo {
+            id: name.into(),
+            name: name.into(),
+            role: "General".into(),
+            capability: "x".into(),
+            specialties: vec![],
+        }
+    }
+
+    #[test]
+    fn test_skill_ids_are_unique_even_when_names_slug_alike() {
+        // ":" and "-" both slug to "-"; "a2a-foo-2" is taken by a real name.
+        let names = ["a2a:Foo", "a2a-Foo", "a2a-foo-2", "翻訳", "契約"];
+        let roster: Vec<_> = names.iter().map(|n| agent(n)).collect();
+        let card = mesh_card(&MeshCardConfig::new("http://x"), &roster);
+        let ids: Vec<_> = card.skills.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["a2a-foo", "a2a-foo-2", "a2a-foo-2-3", "翻訳", "契約"]);
+        let unique: std::collections::HashSet<_> = ids.iter().collect();
+        assert_eq!(unique.len(), ids.len());
     }
 
     fn card() -> AgentCard {
