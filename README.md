@@ -84,24 +84,28 @@ cargo build --release
 # Watch signals settle. No LLM, no API key.
 cargo run --release --bin smesh -- sim --nodes 50 --ticks 100
 
-# Check which LLM backends are configured
+# Check the OpenRouter connection
 cargo run --release --bin smesh -- status
 ```
 
-LLM features read `OPENROUTER_API_KEY` or `ANTHROPIC_API_KEY`. Plain-language routing reads
-`TYPESAFE_API_KEY` ([Jev](https://docs.typesafe.ai/introduction)). The quant study reads
-`MASSIVE_API_KEY`; Kalshi and Kraken need no key for the data it uses. Each key can also live
-in a dotenv file under `~/.creds/`; [CLAUDE.md](CLAUDE.md#environment-variables) lists them all.
+LLM agents read `OPENROUTER_API_KEY`; the Claude backend reads `ANTHROPIC_API_KEY`.
+Plain-language routing reads `TYPESAFE_API_KEY` ([Jev](https://docs.typesafe.ai/introduction)).
+The quant study reads `MASSIVE_API_KEY`; Kalshi and Kraken need no key for the data it uses.
+Every key except `ANTHROPIC_API_KEY` can also live in a dotenv file under `~/.creds/`; the
+Anthropic key must be exported. [CLAUDE.md](CLAUDE.md#environment-variables) lists them all.
 
 ## What you can run
 
-Everything ships in one binary, `smesh`. Run `smesh --help` for the full list.
+Everything ships in one binary, `smesh`. Install it with `cargo install --path smesh-cli`
+to use the commands below as written, or run each as `cargo run --release --bin smesh -- <args>`.
+`smesh --help` lists them all. Servers and nodes keep running, so start each in its own terminal.
 
 ### Agents, in any domain, behind one A2A endpoint
 
 ```bash
 # The whole mesh is one A2A v1.0 agent. Describe agents in plain language;
 # each asks Jev whether it suits a task, and the field settles who takes it.
+# Local agents need OPENROUTER_API_KEY as well as TYPESAFE_API_KEY.
 smesh a2a serve --jev \
   --agent "Translator=a translator between English and Portuguese" \
   --agent "Contracts=a reviewer of commercial contracts who flags risky clauses"
@@ -109,16 +113,16 @@ smesh a2a serve --jev \
 smesh a2a send --url http://127.0.0.1:7410 "Translate into Portuguese: the evidence decides."
 smesh a2a card http://127.0.0.1:7410          # its Agent Card, signed when served with --sign-key
 
-# Recruit other A2A agents as members of the mesh
-smesh a2a serve --recruit http://other-agent:9000
+# A mesh of remote A2A agents only (--agents 0 starts no local ones)
+smesh a2a serve --agents 0 --recruit http://other-agent:9000
 ```
 
 ### A read-only research mesh
 
 ```bash
-smesh quant run --track both                 # walk-forward study, every step journaled
-smesh quant export-site --run runs/quant-<ts> --out site/data
-smesh a2a serve --jev --agents 0 --quant-run runs/quant-<ts>   # ask the finished study questions
+smesh quant run --track both --out runs/quant-mine   # walk-forward study, every step journaled
+smesh quant export-site --run runs/quant-mine --out site/data
+smesh a2a serve --jev --agents 0 --quant-run runs/quant-mine   # ask the finished study questions
 ```
 
 The market-data client can only issue `GET`s to an allowlist of public market-data paths.
@@ -127,12 +131,13 @@ There is no code path to an order, a cancel or a wallet.
 ### A live peer-to-peer mesh
 
 ```bash
-smesh mesh --name a --bind 127.0.0.1:7001 --identity a.key
-smesh mesh --name b --peer 127.0.0.1:7001 --emit "hello, field"
+smesh mesh --name a --bind 127.0.0.1:7001 --identity a.key --duration 0   # terminal 1
+smesh mesh --name b --peer 127.0.0.1:7001 --emit "hello, field"           # terminal 2
 ```
 
-Nodes talk over QUIC and sign what they send. A node that restarts with a different key is
-refused as an impostor.
+Nodes talk over QUIC and sign what they send. Each node pins a peer's key the first time it
+sees that name (trust on first use, held in memory), and refuses the same name later presented
+with a different key. Pins reset when a node restarts.
 
 ### More
 

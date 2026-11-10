@@ -88,13 +88,15 @@
 <span class="dim">$</span> cd smesh-rust &amp;&amp; cargo build --release
 <span class="dim">$</span> cargo run --release --bin smesh -- sim --nodes 50 --ticks 100
 
-<span class="dim"># the mesh as one A2A v1.0 agent; agents in plain language</span>
+<span class="dim"># install, then serve the mesh as one A2A v1.0 agent</span>
+<span class="dim"># (needs OPENROUTER_API_KEY and TYPESAFE_API_KEY)</span>
+<span class="dim">$</span> cargo install --path smesh-cli
 <span class="dim">$</span> smesh a2a serve --jev \
     --agent "Contracts=a reviewer of commercial contracts"
 
-<span class="dim"># re-run this study (read-only market data)</span>
-<span class="dim">$</span> smesh quant run --track both
-<span class="dim">$</span> smesh quant export-site --run runs/quant-&lt;ts&gt; --out site/data</pre></div>
+<span class="dim"># re-run this study (read-only; needs MASSIVE_API_KEY)</span>
+<span class="dim">$</span> smesh quant run --track both --out runs/quant-mine
+<span class="dim">$</span> smesh quant export-site --run runs/quant-mine --out site/data</pre></div>
 <ul class="crate-list">
 <li><a href="https://github.com/copyleftdev/smesh-rust/tree/main/smesh-core"><code>smesh-core</code><span>Signals, nodes, fields, network topologies, Bayesian trust.</span></a></li>
 <li><a href="https://github.com/copyleftdev/smesh-rust/tree/main/smesh-runtime"><code>smesh-runtime</code><span>A live peer-to-peer mesh over QUIC, with signed attestation.</span></a></li>
