@@ -6,6 +6,9 @@
 //! command = "npx"
 //! args = ["-y", "@modelcontextprotocol/server-filesystem", "./docs"]
 //!
+//! # A stdio server sees only a basic environment (PATH, HOME, locale, temp)
+//! # plus `env`, never this process's API keys; `inherit_env = true` opts out.
+//!
 //! # An MCP server over streamable HTTP. A value starting with `$` is read
 //! # from the environment, so secrets stay out of the file.
 //! [servers.tracker]
@@ -70,6 +73,11 @@ pub struct ServerConfig {
     /// Show the process's stderr (hidden by default; turn on to debug a server).
     #[serde(default)]
     pub show_stderr: bool,
+    /// Pass this process's whole environment to the server. Off by default:
+    /// the server sees only a basic environment (PATH, HOME, locale, temp)
+    /// plus `env`, so it never receives API keys it was not given.
+    #[serde(default)]
+    pub inherit_env: bool,
     /// Endpoint of a streamable-HTTP server.
     pub url: Option<String>,
     /// Bearer token for an HTTP server (`$NAME` reads `NAME` from the environment).
@@ -176,9 +184,9 @@ impl ToolsConfig {
                         "server {name:?}: `args` and `env` apply only to a `command` server"
                     ))
                 }
-                (None, Some(_)) if server.show_stderr || server.cwd.is_some() => {
+                (None, Some(_)) if server.show_stderr || server.cwd.is_some() || server.inherit_env => {
                     return bad(format!(
-                        "server {name:?}: `cwd` and `show_stderr` apply only to a `command` server"
+                        "server {name:?}: `cwd`, `show_stderr` and `inherit_env` apply only to a `command` server"
                     ))
                 }
                 (Some(_), None) if server.bearer.is_some() => {
@@ -281,6 +289,7 @@ fn transport_for(name: &str, server: &ServerConfig) -> Result<McpTransport, Conf
             env,
             cwd: server.cwd.clone(),
             show_stderr: server.show_stderr,
+            inherit_env: server.inherit_env,
         })
     } else if let Some(url) = &server.url {
         Ok(McpTransport::Http {

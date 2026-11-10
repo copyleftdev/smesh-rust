@@ -38,7 +38,7 @@ use futures::channel::mpsc;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use serde_json::{json, Value};
-use smesh_agent::{AgentCoordinator, CallOutcome, ExecuteError, RoundTrace};
+use smesh_agent::{AgentCoordinator, CallOutcome, ExecuteError, RoundTrace, ToolCall};
 use tokio::task::AbortHandle;
 use tracing::{info, warn};
 
@@ -213,27 +213,7 @@ async fn run_task(mut coordinator: AgentCoordinator, message: Option<Message>, e
 
     match coordinator.execute_settled(&mesh_task_id).await {
         Ok(done) => {
-            for call in &done.tool_calls {
-                let outcome = match call.outcome {
-                    CallOutcome::Ok => "ok".to_string(),
-                    CallOutcome::Error => format!("failed: {}", short(&call.output)),
-                    CallOutcome::Refused => format!("refused: {}", short(&call.output)),
-                };
-                events.status(
-                    TaskState::Working,
-                    format!("{} called {}: {outcome}", done.agent_name, call.tool),
-                    json!({
-                        "event": "tool_call",
-                        "agent": done.node_id,
-                        "agentName": done.agent_name,
-                        "tool": call.tool,
-                        "effect": call.effect,
-                        "outcome": call.outcome,
-                        "input": call.input,
-                        "durationMs": call.duration_ms,
-                    }),
-                );
-            }
+            report_tool_calls(&events, &done.node_id, &done.agent_name, &done.tool_calls);
             info!(task = %events.task_id, agent = %done.agent_name, "mesh task completed");
             let smesh =
                 json!({"event": "completed", "agent": done.node_id, "agentName": done.agent_name});
@@ -250,6 +230,14 @@ async fn run_task(mut coordinator: AgentCoordinator, message: Option<Message>, e
             json!({"event": "unclaimed", "meshTaskId": mesh_task_id}),
         ),
         Err(e) => {
+            // Tools that ran before the failure may have changed things;
+            // say so before reporting it.
+            if let ExecuteError::Backend {
+                agent, tool_calls, ..
+            } = &e
+            {
+                report_tool_calls(&events, &winner, agent, tool_calls);
+            }
             warn!(task = %events.task_id, error = %e, "mesh task failed");
             events.status(
                 TaskState::Failed,
@@ -257,6 +245,31 @@ async fn run_task(mut coordinator: AgentCoordinator, message: Option<Message>, e
                 json!({"event": "error", "reason": e.to_string()}),
             );
         }
+    }
+}
+
+/// One `Working` status update per tool call, in order.
+fn report_tool_calls(events: &Events, node_id: &str, agent_name: &str, calls: &[ToolCall]) {
+    for call in calls {
+        let outcome = match call.outcome {
+            CallOutcome::Ok => "ok".to_string(),
+            CallOutcome::Error => format!("failed: {}", short(&call.output)),
+            CallOutcome::Refused => format!("refused: {}", short(&call.output)),
+        };
+        events.status(
+            TaskState::Working,
+            format!("{agent_name} called {}: {outcome}", call.tool),
+            json!({
+                "event": "tool_call",
+                "agent": node_id,
+                "agentName": agent_name,
+                "tool": call.tool,
+                "effect": call.effect,
+                "outcome": call.outcome,
+                "input": call.input,
+                "durationMs": call.duration_ms,
+            }),
+        );
     }
 }
 

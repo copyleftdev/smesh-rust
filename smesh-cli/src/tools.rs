@@ -30,7 +30,10 @@ pub const EXAMPLE: &str = r#"# SMESH tools: which MCP servers a mesh can reach, 
 #   smesh tools ask "..."            # give the mesh a task
 #   smesh a2a serve --jev --tools smesh.tools.toml
 
-# An MCP server run as a local process, speaking MCP over stdio.
+# An MCP server run as a local process, speaking MCP over stdio. It sees only
+# a basic environment (PATH, HOME, locale, temp) plus anything in `env` (a
+# value starting with `$` is read from yours), never your API keys; set
+# `inherit_env = true` to pass your whole environment instead.
 [servers.files]
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
@@ -171,9 +174,9 @@ pub async fn equip(path: &Path) -> Result<Equipped> {
     for agent in &config.agents {
         let (belt, unmatched) = catalog.toolbelt_for(agent)?;
         for pattern in unmatched {
-            eprintln!(
-                "⚠ {}: tool pattern {pattern:?} matches no tool (see `smesh tools list`)",
-                agent.name
+            tracing::warn!(
+                agent = %agent.name,
+                "tool pattern {pattern:?} matches no tool (see `smesh tools list`)"
             );
         }
         agents.push((agent.clone(), belt));

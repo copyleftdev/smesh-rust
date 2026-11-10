@@ -72,5 +72,6 @@ pub use coordinator::{
 };
 pub use jev::{JevAffinity, JevClient, JevConfig, JevError};
 pub use tools::{
-    run_with_tools, CallOutcome, Effect, Tool, ToolCall, ToolError, ToolOutput, ToolRun, Toolbelt,
+    run_with_tools, CallOutcome, Effect, Tool, ToolCall, ToolError, ToolOutput, ToolRun,
+    ToolRunError, Toolbelt,
 };

@@ -207,7 +207,7 @@ with a different key. Pins reset when a node restarts.
 | [`smesh-bounty`](smesh-bounty) | Security swarms; its sandboxed tools are ordinary mesh tools (`bounty_tools`) |
 | [`smesh-cli`](smesh-cli) | The `smesh` binary |
 
-438 tests pass across the workspace (`cargo test --workspace`); one live evaluation against
+441 tests pass across the workspace (`cargo test --workspace`); one live evaluation against
 Jev is `#[ignore]`d and runs on demand.
 
 ## How it differs from an orchestrator

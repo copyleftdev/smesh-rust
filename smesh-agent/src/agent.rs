@@ -374,11 +374,20 @@ impl LlmAgent {
             return None;
         }
         Some(
-            self.toolbelt
-                .as_ref()
+            self.callable_tools()
                 .and_then(|b| b.usable().map(|t| t.effect()).max())
                 .unwrap_or(Effect::Read),
         )
+    }
+
+    /// The toolbelt, when this agent can actually call it: it has usable
+    /// tools and its backend supports tool use. Routing, privilege and
+    /// execution all go by this, so an agent never claims a task on the
+    /// strength of tools it could not call.
+    fn callable_tools(&self) -> Option<&Toolbelt> {
+        self.toolbelt
+            .as_ref()
+            .filter(|b| b.has_usable() && self.backend.supports_tools())
     }
 
     /// What this agent does and the tools it can use, in plain language.
@@ -386,7 +395,7 @@ impl LlmAgent {
     /// right tools for a task is the one that claims it.
     pub fn profile(&self) -> String {
         let capability = self.config.capability_text();
-        match self.toolbelt.as_ref().map(Toolbelt::describe) {
+        match self.callable_tools().map(Toolbelt::describe) {
             Some(tools) if !tools.is_empty() => format!("{capability}. {tools}"),
             _ => capability.to_string(),
         }
@@ -509,23 +518,29 @@ impl LlmAgent {
         debug!("Agent {} executing task {}", self.config.name, task.id);
 
         self.last_tool_calls.clear();
-        let tools = self
-            .toolbelt
-            .as_ref()
-            .filter(|b| b.has_usable() && self.backend.supports_tools());
-        let result = match tools {
+        let result = match self.callable_tools() {
             Some(belt) => {
-                let run = run_with_tools(
+                match run_with_tools(
                     self.backend.as_ref(),
                     &system,
                     &prompt,
                     belt,
                     MAX_TOOL_TURNS,
                 )
-                .await?;
-                self.llm_calls += run.turns as u64;
-                self.last_tool_calls = run.calls;
-                run.text
+                .await
+                {
+                    Ok(run) => {
+                        self.llm_calls += run.turns as u64;
+                        self.last_tool_calls = run.calls;
+                        run.text
+                    }
+                    Err(failed) => {
+                        // Keep what already ran (a write, say) so the caller
+                        // can report it alongside the failure.
+                        self.last_tool_calls = failed.calls;
+                        return Err(failed.source);
+                    }
+                }
             }
             None => {
                 self.llm_calls += 1;

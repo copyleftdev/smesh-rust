@@ -134,6 +134,9 @@ pub enum ExecuteError {
         /// The backend's error.
         #[source]
         source: crate::backend::LlmError,
+        /// Tool calls that ran before it failed. They may have changed
+        /// things, so they are reported even though the task failed.
+        tool_calls: Vec<crate::tools::ToolCall>,
     },
 }
 
@@ -336,16 +339,14 @@ impl AgentCoordinator {
         };
 
         let agent_name = agent.name().to_string();
-        let result =
-            agent
-                .execute_task(&mut task)
-                .await
-                .map_err(|source| ExecuteError::Backend {
-                    task_id: task_id.to_string(),
-                    agent: agent_name.clone(),
-                    source,
-                })?;
+        let outcome = agent.execute_task(&mut task).await;
         let tool_calls = std::mem::take(&mut agent.last_tool_calls);
+        let result = outcome.map_err(|source| ExecuteError::Backend {
+            task_id: task_id.to_string(),
+            agent: agent_name.clone(),
+            source,
+            tool_calls: tool_calls.clone(),
+        })?;
         agent.results.push(task);
         self.completed.push(task_id.to_string());
 

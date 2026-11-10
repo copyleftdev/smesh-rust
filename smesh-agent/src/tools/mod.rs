@@ -450,6 +450,18 @@ pub struct ToolRun {
     pub turns: usize,
 }
 
+/// [`run_with_tools`] failed. `calls` holds the tool calls that ran before
+/// the failure, which may have changed things, so a caller can report them.
+#[derive(Debug, Error)]
+#[error("{source}")]
+pub struct ToolRunError {
+    /// What failed.
+    #[source]
+    pub source: LlmError,
+    /// Tool calls completed before it failed, in order.
+    pub calls: Vec<ToolCall>,
+}
+
 /// Instructions added to an agent's system prompt when it has tools.
 pub const TOOL_GUIDANCE: &str = "You have tools, and they reach what you cannot otherwise see: \
 files, systems, today's date. Before you say you lack information, or write about something, check \
@@ -468,7 +480,7 @@ pub async fn run_with_tools(
     prompt: &str,
     belt: &Toolbelt,
     max_turns: usize,
-) -> Result<ToolRun, LlmError> {
+) -> Result<ToolRun, ToolRunError> {
     let tools = belt.definitions();
     let system = format!("{system}\n\n{TOOL_GUIDANCE}");
     let mut messages = vec![Message::user(prompt)];
@@ -482,9 +494,13 @@ pub async fn run_with_tools(
     };
 
     for turn in 1..=max_turns.max(1) {
-        let response = backend
+        let response = match backend
             .generate_v2(request(&messages, ToolChoice::Auto))
-            .await?;
+            .await
+        {
+            Ok(r) => r,
+            Err(source) => return Err(ToolRunError { source, calls }),
+        };
         let uses: Vec<(String, String, Value)> = response
             .tool_uses()
             .into_iter()
@@ -523,9 +539,13 @@ pub async fn run_with_tools(
     messages.push(Message::user(
         "You have used all your tool turns. Answer now from what you have.",
     ));
-    let response = backend
+    let response = match backend
         .generate_v2(request(&messages, ToolChoice::None))
-        .await?;
+        .await
+    {
+        Ok(r) => r,
+        Err(source) => return Err(ToolRunError { source, calls }),
+    };
     Ok(ToolRun {
         text: response.text(),
         calls,

@@ -40,6 +40,10 @@ pub enum McpTransport {
         cwd: Option<std::path::PathBuf>,
         /// Pass the server's stderr through instead of discarding it.
         show_stderr: bool,
+        /// Give the server this process's whole environment. Off by default:
+        /// a server then sees only [`BASE_ENV`] and `env`, so third-party
+        /// code never receives API keys it was not given.
+        inherit_env: bool,
     },
     /// Connect to a streamable-HTTP MCP endpoint.
     Http {
@@ -95,9 +99,60 @@ impl std::fmt::Debug for McpServer {
     }
 }
 
+/// Environment a stdio server gets by default: enough to find programs, a
+/// home directory, a temp directory and a locale, and nothing secret.
+pub const BASE_ENV: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "LANG",
+    "LC_ALL",
+    "TERM",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "XDG_CONFIG_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_DATA_HOME",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "SYSTEMROOT",
+    "COMSPEC",
+    "PATHEXT",
+];
+
 /// How long a server may take to start and complete the handshake. `npx`
 /// may download a package the first time, so this is generous.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// The process for a stdio server: `env` on top of [`BASE_ENV`], or on top
+/// of everything when `inherit_env` is set.
+pub fn stdio_command(
+    command: &str,
+    args: &[String],
+    env: &HashMap<String, String>,
+    cwd: Option<&std::path::Path>,
+    inherit_env: bool,
+) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new(command);
+    cmd.args(args);
+    if !inherit_env {
+        cmd.env_clear();
+        for key in BASE_ENV {
+            if let Some(value) = std::env::var_os(key) {
+                cmd.env(key, value);
+            }
+        }
+    }
+    cmd.envs(env);
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
+    cmd
+}
 
 fn client_info() -> ClientConfig {
     let mut info = ClientConfig::default();
@@ -115,12 +170,9 @@ impl McpServer {
                 env,
                 cwd,
                 show_stderr,
+                inherit_env,
             } => {
-                let mut cmd = tokio::process::Command::new(command);
-                cmd.args(args).envs(env);
-                if let Some(dir) = cwd {
-                    cmd.current_dir(dir);
-                }
+                let cmd = stdio_command(command, args, env, cwd.as_deref(), *inherit_env);
                 // Servers log banners and warnings to stderr; keep them out of
                 // the way unless asked for, since they are not MCP traffic.
                 let stderr = if *show_stderr {

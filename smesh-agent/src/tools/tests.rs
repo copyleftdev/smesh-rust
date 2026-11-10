@@ -53,6 +53,7 @@ impl Tool for Echo {
 struct Scripted {
     replies: Mutex<VecDeque<GenerateResponseV2>>,
     seen: Mutex<Vec<GenerateRequestV2>>,
+    tools: bool,
 }
 
 impl Scripted {
@@ -77,6 +78,7 @@ impl Scripted {
                     .collect(),
             ),
             seen: Mutex::new(Vec::new()),
+            tools: true,
         }
     }
 }
@@ -110,7 +112,7 @@ impl LlmBackend for Scripted {
             .ok_or_else(|| LlmError::GenerationFailed("script ran out".into()))
     }
     fn supports_tools(&self) -> bool {
-        true
+        self.tools
     }
 }
 
@@ -295,6 +297,76 @@ async fn when_turns_run_out_the_model_answers_without_tools() {
     assert_eq!(run.calls.len(), 2);
     let seen = model.seen.lock().unwrap();
     assert!(matches!(seen[2].tool_choice, ToolChoice::None));
+}
+
+#[tokio::test]
+async fn a_failure_after_tools_ran_still_reports_them() {
+    let write = Echo::new("write", Effect::Write);
+    let belt = Toolbelt::new(Effect::Write)
+        .with_tool(write.clone())
+        .unwrap();
+    // The model calls a write tool, then the backend fails on the next turn.
+    let model = Scripted::new(vec![vec![use_tool("1", "write", json!({ "x": 1 }))]]);
+    let err = run_with_tools(&model, "s", "p", &belt, 4)
+        .await
+        .unwrap_err();
+    assert_eq!(*write.calls.lock().unwrap(), 1, "the write happened");
+    assert_eq!(err.calls.len(), 1, "and the error says so");
+    assert_eq!(err.calls[0].tool, "write");
+    assert!(err.source.to_string().contains("script ran out"));
+}
+
+#[tokio::test]
+async fn an_agent_whose_backend_cannot_call_tools_neither_advertises_nor_uses_them() {
+    use crate::agent::{AgentConfig, AgentRole, LlmAgent};
+    let belt = Toolbelt::new(Effect::Write)
+        .with_tool(Echo::new("write", Effect::Write))
+        .unwrap();
+    let mut plain = Scripted::new(vec![]);
+    plain.tools = false;
+    let agent = LlmAgent::new(
+        AgentConfig::new("A", AgentRole::General).with_capability("an assistant"),
+        Arc::new(plain),
+    )
+    .with_toolbelt(belt.clone());
+    assert_eq!(agent.profile(), "an assistant", "no tools in its profile");
+    assert_eq!(
+        agent.privilege(),
+        Some(Effect::Read),
+        "nor in its privilege"
+    );
+
+    let capable = LlmAgent::new(
+        AgentConfig::new("B", AgentRole::General).with_capability("an assistant"),
+        Arc::new(Scripted::new(vec![])),
+    )
+    .with_toolbelt(belt);
+    assert!(capable.profile().contains("write"));
+    assert_eq!(capable.privilege(), Some(Effect::Write));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn stdio_servers_get_a_basic_environment_not_our_secrets() {
+    // A variable only the parent has, standing in for an API key.
+    std::env::set_var("SMESH_TEST_PARENT_SECRET", "sk-should-not-leak");
+    let env = HashMap::from([("GIVEN".to_string(), "on purpose".to_string())]);
+    let args = vec!["-c".to_string(), "env".to_string()];
+
+    let isolated = mcp::stdio_command("sh", &args, &env, None, false)
+        .output()
+        .await
+        .unwrap();
+    let seen = String::from_utf8_lossy(&isolated.stdout);
+    assert!(!seen.contains("sk-should-not-leak"), "{seen}");
+    assert!(seen.contains("GIVEN=on purpose"));
+    assert!(seen.lines().any(|l| l.starts_with("PATH=")), "PATH is kept");
+
+    let inherited = mcp::stdio_command("sh", &args, &env, None, true)
+        .output()
+        .await
+        .unwrap();
+    assert!(String::from_utf8_lossy(&inherited.stdout).contains("sk-should-not-leak"));
 }
 
 #[test]
