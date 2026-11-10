@@ -172,6 +172,13 @@ pub fn sign_card(card: &mut AgentCard, key: &SigningKey) {
 ///
 /// Returns the key that signed it. Signatures from keys not in `trusted` are
 /// skipped, not accepted.
+///
+/// A card may carry several signatures, some made by other implementations
+/// with other algorithms. One this function cannot use (malformed, or not
+/// EdDSA) is skipped too, so it cannot veto a valid trusted signature beside
+/// it. When nothing verifies, the error reported is the most telling one: a
+/// trusted key's signature that does not match, then the first unusable
+/// signature, then "no trusted key".
 pub fn verify_card(
     card: &AgentCard,
     trusted: &[VerifyingKey],
@@ -182,40 +189,54 @@ pub fn verify_card(
         .filter(|s| !s.is_empty())
         .ok_or(CardSignatureError::Unsigned)?;
 
-    let mut saw_trusted = false;
+    let mut bad_trusted = false;
+    let mut first_unusable = None;
     for sig in signatures {
-        let header: Value = B64
-            .decode(&sig.protected)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .ok_or_else(|| CardSignatureError::Malformed("protected header".into()))?;
-        let alg = header.get("alg").and_then(Value::as_str).unwrap_or("");
-        if alg != "EdDSA" {
-            return Err(CardSignatureError::UnsupportedAlgorithm(alg.into()));
-        }
-        let kid = header.get("kid").and_then(Value::as_str).unwrap_or("");
-        let Some(key) = trusted.iter().find(|k| key_id(k) == kid) else {
-            continue;
-        };
-        saw_trusted = true;
-
-        let bytes = B64
-            .decode(&sig.signature)
-            .map_err(|e| CardSignatureError::Malformed(e.to_string()))?;
-        let signature = Signature::from_slice(&bytes)
-            .map_err(|e| CardSignatureError::Malformed(e.to_string()))?;
-        if key
-            .verify(signing_input(&sig.protected, card).as_bytes(), &signature)
-            .is_ok()
-        {
-            return Ok(*key);
+        match check_signature(sig, card, trusted) {
+            Ok(Some(key)) => return Ok(key),
+            Ok(None) => {}
+            Err(CardSignatureError::BadSignature) => bad_trusted = true,
+            Err(e) => {
+                first_unusable.get_or_insert(e);
+            }
         }
     }
-    Err(if saw_trusted {
+    Err(if bad_trusted {
         CardSignatureError::BadSignature
     } else {
-        CardSignatureError::UntrustedKey
+        first_unusable.unwrap_or(CardSignatureError::UntrustedKey)
     })
+}
+
+/// Check one signature. `Ok(None)` means it was made by a key not in
+/// `trusted`.
+fn check_signature(
+    sig: &AgentCardSignature,
+    card: &AgentCard,
+    trusted: &[VerifyingKey],
+) -> Result<Option<VerifyingKey>, CardSignatureError> {
+    let header: Value = B64
+        .decode(&sig.protected)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .ok_or_else(|| CardSignatureError::Malformed("protected header".into()))?;
+    let alg = header.get("alg").and_then(Value::as_str).unwrap_or("");
+    if alg != "EdDSA" {
+        return Err(CardSignatureError::UnsupportedAlgorithm(alg.into()));
+    }
+    let kid = header.get("kid").and_then(Value::as_str).unwrap_or("");
+    let Some(key) = trusted.iter().find(|k| key_id(k) == kid) else {
+        return Ok(None);
+    };
+
+    let bytes = B64
+        .decode(&sig.signature)
+        .map_err(|e| CardSignatureError::Malformed(e.to_string()))?;
+    let signature =
+        Signature::from_slice(&bytes).map_err(|e| CardSignatureError::Malformed(e.to_string()))?;
+    key.verify(signing_input(&sig.protected, card).as_bytes(), &signature)
+        .map(|()| Some(*key))
+        .map_err(|_| CardSignatureError::BadSignature)
 }
 
 /// JWS signing input for a detached payload: `protected "." payload`, where the
@@ -360,6 +381,67 @@ mod tests {
         assert_eq!(
             verify_card(&card(), &[key(1).verifying_key()]),
             Err(CardSignatureError::Unsigned)
+        );
+    }
+
+    /// A signature another implementation might add: a different algorithm.
+    fn foreign_signature(alg: &str) -> AgentCardSignature {
+        AgentCardSignature {
+            protected: B64.encode(format!(r#"{{"alg":"{alg}","kid":"other"}}"#)),
+            signature: B64.encode([0u8; 64]),
+            header: None,
+        }
+    }
+
+    fn garbage_signature() -> AgentCardSignature {
+        AgentCardSignature {
+            protected: "!!not base64!!".into(),
+            signature: String::new(),
+            header: None,
+        }
+    }
+
+    #[test]
+    fn test_foreign_algorithm_signature_does_not_veto_a_trusted_one() {
+        let mut card = card();
+        card.signatures = Some(vec![foreign_signature("ES256")]);
+        sign_card(&mut card, &key(1));
+        assert_eq!(
+            verify_card(&card, &[key(1).verifying_key()]).unwrap(),
+            key(1).verifying_key()
+        );
+    }
+
+    #[test]
+    fn test_malformed_signature_does_not_veto_a_trusted_one() {
+        let mut card = card();
+        card.signatures = Some(vec![garbage_signature()]);
+        sign_card(&mut card, &key(1));
+        assert!(verify_card(&card, &[key(1).verifying_key()]).is_ok());
+    }
+
+    #[test]
+    fn test_only_unusable_signatures_report_the_first_problem() {
+        let mut card = card();
+        card.signatures = Some(vec![foreign_signature("ES256"), garbage_signature()]);
+        assert_eq!(
+            verify_card(&card, &[key(1).verifying_key()]),
+            Err(CardSignatureError::UnsupportedAlgorithm("ES256".into()))
+        );
+    }
+
+    #[test]
+    fn test_bad_trusted_signature_outranks_unusable_ones() {
+        let mut card = card();
+        sign_card(&mut card, &key(1));
+        card.signatures
+            .as_mut()
+            .unwrap()
+            .push(foreign_signature("ES256"));
+        card.name = "tampered".into();
+        assert_eq!(
+            verify_card(&card, &[key(1).verifying_key()]),
+            Err(CardSignatureError::BadSignature)
         );
     }
 

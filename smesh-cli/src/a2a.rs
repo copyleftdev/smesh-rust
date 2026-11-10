@@ -98,15 +98,55 @@ pub async fn run(command: A2aCommand) -> Result<()> {
 fn read_signing_key(path: &std::path::Path) -> Result<SigningKey> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("reading signing key {}", path.display()))?;
-    let hex = text.trim();
-    if hex.len() != 64 {
+    parse_signing_key(&text)
+}
+
+/// Parse a 32-byte Ed25519 seed written as 64 hex characters.
+///
+/// Every byte is checked to be an ASCII hex digit before any slicing: the
+/// length alone counts bytes, so non-ASCII text of the right length would
+/// otherwise be sliced inside a character and panic, and `from_str_radix`
+/// would accept a `+` sign.
+fn parse_signing_key(text: &str) -> Result<SigningKey> {
+    let hex = text.trim().as_bytes();
+    if hex.len() != 64 || !hex.iter().all(u8::is_ascii_hexdigit) {
         bail!("signing key must be 64 hex characters (a 32-byte Ed25519 seed)");
     }
+    let digit = |b: u8| (b as char).to_digit(16).expect("checked hex digit") as u8;
     let mut seed = [0u8; 32];
-    for (i, byte) in seed.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).context("signing key is not hex")?;
+    for (byte, pair) in seed.iter_mut().zip(hex.chunks_exact(2)) {
+        *byte = digit(pair[0]) << 4 | digit(pair[1]);
     }
     Ok(SigningKey::from_bytes(&seed))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_signing_key_reads_hex_seed() {
+        let key = parse_signing_key(&format!("{}\n", "0a".repeat(32))).unwrap();
+        assert_eq!(key.to_bytes(), [0x0a; 32]);
+        let upper = parse_signing_key(&"FF".repeat(32)).unwrap();
+        assert_eq!(upper.to_bytes(), [0xff; 32]);
+    }
+
+    #[test]
+    fn test_parse_signing_key_rejects_non_ascii_of_the_right_length() {
+        // "a" + 31 two-byte "é" + "b" = 64 bytes. The first byte pair ends
+        // inside the first "é", so slicing it by byte pairs used to panic.
+        let text = format!("a{}b", "é".repeat(31));
+        assert_eq!(text.len(), 64);
+        assert!(parse_signing_key(&text).is_err());
+    }
+
+    #[test]
+    fn test_parse_signing_key_rejects_signs_and_wrong_lengths() {
+        assert!(parse_signing_key(&format!("+1{}", "00".repeat(31))).is_err());
+        assert!(parse_signing_key(&"00".repeat(31)).is_err());
+        assert!(parse_signing_key(&"zz".repeat(32)).is_err());
+    }
 }
 
 async fn serve(
