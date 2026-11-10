@@ -71,6 +71,41 @@ pub struct AgentInfo {
     pub role: String,
 }
 
+/// One task carried out by the agent that won it.
+#[derive(Debug, Clone)]
+pub struct ExecutedTask {
+    /// Task ID in the coordinator's field.
+    pub task_id: String,
+    /// Node ID of the agent that executed it.
+    pub node_id: NodeId,
+    /// Display name of that agent.
+    pub agent_name: String,
+    /// What the agent produced.
+    pub result: String,
+}
+
+/// Why a task could not be executed.
+#[derive(Debug, thiserror::Error)]
+pub enum ExecuteError {
+    /// No such task was ever added.
+    #[error("unknown task {0}")]
+    UnknownTask(String),
+    /// Settlement ended with no claim on the task: no agent had the affinity.
+    #[error("no agent claimed task {0}")]
+    Unclaimed(String),
+    /// The winning agent's backend failed.
+    #[error("agent {agent} failed task {task_id}: {source}")]
+    Backend {
+        /// Task that failed.
+        task_id: String,
+        /// Agent that was executing it.
+        agent: String,
+        /// The backend's error.
+        #[source]
+        source: crate::backend::LlmError,
+    },
+}
+
 /// Result of coordinator execution
 #[derive(Debug, Clone)]
 pub struct CoordinatorResult {
@@ -152,6 +187,77 @@ impl AgentCoordinator {
         let factory: BackendFactory =
             Box::new(move || Arc::new(ClaudeClient::new(claude_config.clone())));
         Self::new(config, factory)
+    }
+
+    /// Add an already-built agent to the mesh.
+    ///
+    /// Use this for an agent whose backend the factory does not make — a
+    /// remote A2A agent, say. It takes part in settlement exactly like the
+    /// agents the coordinator created. Returns its node ID.
+    pub fn add_agent(&mut self, agent: LlmAgent) -> NodeId {
+        let node_id = agent.node_id().to_string();
+        info!("Added agent: {} ({})", agent.name(), node_id);
+        self.agents.insert(node_id.clone(), agent);
+        node_id
+    }
+
+    /// The agent whose claim on `task_id` survived settlement, if any.
+    pub fn winner_for(&self, task_id: &str) -> Option<NodeId> {
+        self.converged_winners()
+            .into_iter()
+            .find(|(_, t)| t == task_id)
+            .map(|(node, _)| node)
+    }
+
+    /// Execute one task on the agent that won it in settlement.
+    ///
+    /// Call after [`settle_traced`](Self::settle_traced) (or rounds of
+    /// [`coordination_round`](Self::coordination_round)) have run.
+    pub async fn execute_settled(&mut self, task_id: &str) -> Result<ExecutedTask, ExecuteError> {
+        let task_def = self
+            .tasks
+            .get(task_id)
+            .cloned()
+            .ok_or_else(|| ExecuteError::UnknownTask(task_id.to_string()))?;
+        let node_id = self
+            .winner_for(task_id)
+            .ok_or_else(|| ExecuteError::Unclaimed(task_id.to_string()))?;
+        let agent = self
+            .agents
+            .get_mut(&node_id)
+            .ok_or_else(|| ExecuteError::Unclaimed(task_id.to_string()))?;
+
+        let mut task = AgentTask {
+            id: task_id.to_string(),
+            task_type: task_def
+                .task_type
+                .parse::<TaskType>()
+                .unwrap_or(TaskType::Analysis),
+            description: task_def.description,
+            priority: task_def.priority,
+            status: TaskStatus::InProgress,
+            result: None,
+        };
+
+        let agent_name = agent.name().to_string();
+        let result =
+            agent
+                .execute_task(&mut task)
+                .await
+                .map_err(|source| ExecuteError::Backend {
+                    task_id: task_id.to_string(),
+                    agent: agent_name.clone(),
+                    source,
+                })?;
+        agent.results.push(task);
+        self.completed.push(task_id.to_string());
+
+        Ok(ExecutedTask {
+            task_id: task_id.to_string(),
+            node_id,
+            agent_name,
+            result,
+        })
     }
 
     /// Add a task to be coordinated.

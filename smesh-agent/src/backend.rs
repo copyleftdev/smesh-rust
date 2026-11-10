@@ -48,6 +48,8 @@ pub enum LlmProvider {
     Claude,
     /// OpenAI API (future)
     OpenAI,
+    /// A remote agent reached over the A2A (Agent2Agent) protocol
+    A2a,
 }
 
 impl std::fmt::Display for LlmProvider {
@@ -56,6 +58,7 @@ impl std::fmt::Display for LlmProvider {
             LlmProvider::OpenRouter => write!(f, "OpenRouter"),
             LlmProvider::Claude => write!(f, "Claude"),
             LlmProvider::OpenAI => write!(f, "OpenAI"),
+            LlmProvider::A2a => write!(f, "A2A"),
         }
     }
 }

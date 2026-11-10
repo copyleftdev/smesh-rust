@@ -108,6 +108,15 @@ pub enum TaskType {
 }
 
 impl TaskType {
+    /// Every task type, in a fixed order.
+    pub const ALL: [TaskType; 5] = [
+        TaskType::CodeWrite,
+        TaskType::CodeReview,
+        TaskType::Testing,
+        TaskType::Documentation,
+        TaskType::Analysis,
+    ];
+
     pub fn as_str(&self) -> &'static str {
         match self {
             TaskType::CodeWrite => "code_write",
@@ -148,6 +157,14 @@ pub struct AgentConfig {
     /// OpenRouter configuration (used when the agent builds its own backend)
     #[serde(default)]
     pub openrouter: Option<OpenRouterConfig>,
+    /// Per-task-type skill levels that replace the role's table.
+    ///
+    /// A role's skills are a fixed table. An agent whose abilities come from
+    /// somewhere else — a remote A2A agent, whose card advertises its skills —
+    /// sets them here instead. A task type missing from the map falls back to
+    /// the role's level for it.
+    #[serde(default)]
+    pub skill_overrides: Option<HashMap<TaskType, f64>>,
 }
 
 impl Default for AgentConfig {
@@ -158,6 +175,7 @@ impl Default for AgentConfig {
             max_concurrent_tasks: 3,
             affinity_threshold: 0.5,
             openrouter: Some(OpenRouterConfig::default()),
+            skill_overrides: None,
         }
     }
 }
@@ -181,6 +199,12 @@ impl AgentConfig {
     /// Set affinity threshold
     pub fn with_affinity_threshold(mut self, threshold: f64) -> Self {
         self.affinity_threshold = threshold;
+        self
+    }
+
+    /// Replace the role's skill levels with these, per task type.
+    pub fn with_skill_overrides(mut self, skills: HashMap<TaskType, f64>) -> Self {
+        self.skill_overrides = Some(skills);
         self
     }
 }
@@ -282,6 +306,14 @@ impl LlmAgent {
 
     /// Get skill level for a task type
     pub fn skill(&self, task_type: TaskType) -> f64 {
+        if let Some(level) = self
+            .config
+            .skill_overrides
+            .as_ref()
+            .and_then(|skills| skills.get(&task_type))
+        {
+            return *level;
+        }
         self.config
             .role
             .skills()
