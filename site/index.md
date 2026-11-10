@@ -25,4 +25,22 @@ smesh a2a send "Are Kalshi's hourly bitcoin odds well calibrated?"
 
 Jev routes the question to the research agent, which asks Jev which recorded findings bear on it and returns them verbatim.
 
+## Build
+
+SMESH is a Rust workspace with a single `smesh` binary:
+
+```
+git clone https://github.com/copyleftdev/smesh-rust
+cd smesh-rust && cargo build --release
+cargo run --release --bin smesh -- sim --nodes 50 --ticks 100
+```
+
+- `smesh-core`: signals, nodes, fields, network topologies, Bayesian trust.
+- `smesh-runtime`: a live peer-to-peer mesh over QUIC, with signed attestation.
+- `smesh-agent`: LLM agents on OpenRouter or Claude; plain-language routing with Jev.
+- `smesh-a2a`: the mesh as an A2A v1.0 agent, with signed Agent Cards.
+- `smesh-quant`: the read-only research mesh this page replays.
+- `smesh-world`, `smesh-refinery`, `smesh-ratify`: signed organizational world models, with a human as merge authority.
+- `smesh-bounty`: security swarms with agentic tool execution, for authorized testing.
+
 Source: https://github.com/copyleftdev/smesh-rust · Independent of TypeSafe AI, Kalshi, Massive and Kraken. Research, not trading advice.
