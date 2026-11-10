@@ -45,9 +45,17 @@ pub struct RunLog {
 
 impl RunLog {
     /// Create `dir` (and `dir/agents`) and start the run clock now.
+    ///
+    /// Journals left in `dir/agents` by an earlier run are removed, so
+    /// [`merge`](Self::merge) cannot mix their events into this run's
+    /// timeline (a crypto-only rerun would otherwise inherit macro events).
     pub fn create(dir: impl Into<PathBuf>) -> std::io::Result<Self> {
         let dir = dir.into();
-        std::fs::create_dir_all(dir.join("agents"))?;
+        let agents = dir.join("agents");
+        if agents.exists() {
+            std::fs::remove_dir_all(&agents)?;
+        }
+        std::fs::create_dir_all(&agents)?;
         Ok(Self {
             dir,
             epoch_ms: chrono::Utc::now().timestamp_millis(),
@@ -155,6 +163,22 @@ mod tests {
             .collect();
         assert!(lines.windows(2).all(|w| w[0].t_ms <= w[1].t_ms));
         assert_eq!(lines[0].kind, "entity");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_a_rerun_does_not_inherit_an_earlier_runs_agents() {
+        let dir = tmp("rerun");
+        let first = RunLog::create(&dir).unwrap();
+        first
+            .agent("analyst.macro", "research")
+            .record("sample", json!({}));
+        drop(first);
+        let second = RunLog::create(&dir).unwrap();
+        second.agent("analyst.crypto", "research");
+        second.merge().unwrap();
+        let timeline = std::fs::read_to_string(dir.join("timeline.jsonl")).unwrap();
+        assert!(!timeline.contains("analyst.macro"), "stale journal merged");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

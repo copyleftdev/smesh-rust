@@ -120,11 +120,18 @@ pub enum FetchError {
 
 /// Check that `path` (with any query string) is allowed for `venue`.
 ///
-/// Rejects parent-directory segments too, so an allowed prefix cannot be
-/// walked out of (`/markets/../portfolio`).
+/// Rejects parent-directory segments, percent-encoding and backslashes in
+/// the path too, so an allowed prefix cannot be walked out of, whether
+/// literally (`/markets/../portfolio`) or after URL normalization
+/// (`/markets/%2e%2e/portfolio`, `/markets\..\portfolio`).
 pub fn check_allowed(venue: Venue, path: &str) -> Result<(), FetchError> {
     let bare = path.split('?').next().unwrap_or("");
+    // URL parsing (WHATWG, as reqwest's `url` crate does it) decodes `%2e`
+    // as `.` and treats `\` as `/` for https, so either could walk out of
+    // an allowed prefix after this check. Neither is needed in any path we
+    // request, so both are refused outright.
     let ok = bare.starts_with('/')
+        && !bare.contains(['%', '\\'])
         && !bare.split('/').any(|seg| seg == ".." || seg == ".")
         && venue
             .allowed_prefixes()
@@ -381,6 +388,10 @@ mod tests {
             (Venue::Kraken, "/0/public/../private/Balance"),
             (Venue::Massive, "/v1/marketstatus/now"),
             (Venue::Kalshi, "historical/markets"),
+            (Venue::Kalshi, "/markets/%2e%2e/portfolio/orders"),
+            (Venue::Kalshi, "/markets/.%2E/portfolio/orders"),
+            (Venue::Kalshi, "/markets\\..\\portfolio\\orders"),
+            (Venue::Massive, "/v2/aggs/%2e%2e/%2e%2e/v1/account"),
         ] {
             assert!(
                 check_allowed(venue, path).is_err(),

@@ -132,6 +132,16 @@ impl Sample {
     }
 }
 
+/// The start time of the last 1-minute bar that has closed by `t_ms`.
+///
+/// Bars are labelled by start, so the bar starting exactly at `t_ms` is still
+/// open at `t_ms`. Using it would let the model see up to 59 seconds past the
+/// decision time, which Kalshi's quote (from candles ending at `t_ms`) does
+/// not.
+pub fn known_at(t_ms: i64) -> i64 {
+    t_ms - 60_000
+}
+
 /// Realized standard deviation of 1-minute log returns over the bars in
 /// `(t - lookback, t]`.
 pub fn realized_sigma(bars: &[Bar], t_ms: i64, lookback_ms: i64) -> Option<f64> {
@@ -239,7 +249,11 @@ pub async fn gather(
         let t = close - Duration::minutes(cfg.lead_minutes);
         let t_ms = t.timestamp_millis();
 
-        let Some(spot_bar) = bar_at(&bars, t_ms, 5 * 60_000) else {
+        // Massive labels bars by their start, so the bar starting at `t`
+        // closes after `t`. The last bar fully known at decision time is the
+        // one that closed by `t`: it starts a minute earlier.
+        let known_ms = known_at(t_ms);
+        let Some(spot_bar) = bar_at(&bars, known_ms, 5 * 60_000) else {
             kalshi_j.record(
                 "event.skipped",
                 json!({"event": event, "reason": "no Massive bar near decision time"}),
@@ -247,7 +261,7 @@ pub async fn gather(
             continue;
         };
         let spot = spot_bar.c;
-        let Some(sigma) = realized_sigma(&bars, t_ms, cfg.vol_lookback_minutes * 60_000) else {
+        let Some(sigma) = realized_sigma(&bars, known_ms, cfg.vol_lookback_minutes * 60_000) else {
             kalshi_j.record(
                 "event.skipped",
                 json!({"event": event, "reason": "too few bars for volatility"}),
@@ -413,9 +427,20 @@ pub fn walk_forward(
     let analyst = log.agent("analyst.crypto", "research");
     let skeptic = log.agent("skeptic", "validation");
 
+    // A window must move forward, or the walk never ends.
+    if cfg.test_days < 1 || cfg.train_days < 1 {
+        walker.record(
+            "walk.invalid",
+            json!({"track": "crypto", "train_days": cfg.train_days, "test_days": cfg.test_days,
+                   "reason": "train and test windows must be at least one day"}),
+        );
+        return json!({"windows": 0, "samples": samples.len(), "test_predictions": 0, "per_window": [],
+                      "error": "train_days and test_days must be at least 1"});
+    }
+
     let Some(first) = samples.first().map(|s| s.t) else {
         walker.record("walk.empty", json!({"track": "crypto"}));
-        return json!({"windows": [], "samples": 0});
+        return json!({"windows": 0, "samples": 0, "test_predictions": 0, "per_window": []});
     };
     let last = samples.last().map(|s| s.t).unwrap_or(first);
     let mut windows = Vec::new();
@@ -752,6 +777,58 @@ mod tests {
             .map(|(p, y)| ((p + 0.25).min(0.99), *y))
             .collect();
         assert!(expected_calibration_error(&biased) > calibration_noise_bound(&biased, 500, 1));
+    }
+
+    #[test]
+    fn test_decision_inputs_use_only_bars_closed_by_decision_time() {
+        // Flat at 100 until the bar that starts at t, which jumps to 200.
+        let t = 120 * 60_000i64;
+        let bars: Vec<Bar> = (0..=120)
+            .map(|i| {
+                let c = if i == 120 {
+                    200.0
+                } else {
+                    100.0 * (1.0 + 0.0001 * (i % 2) as f64)
+                };
+                Bar {
+                    t_ms: i * 60_000,
+                    o: c,
+                    h: c,
+                    l: c,
+                    c,
+                    v: 1.0,
+                }
+            })
+            .collect();
+        let spot = bar_at(&bars, known_at(t), 5 * 60_000).unwrap().c;
+        assert!(spot < 101.0, "spot {spot} came from a bar still open at t");
+        let sigma = realized_sigma(&bars, known_at(t), 60 * 60_000).unwrap();
+        assert!(sigma < 0.01, "sigma {sigma} saw the jump after t");
+    }
+
+    #[test]
+    fn test_walk_refuses_a_window_that_cannot_move() {
+        let dir = std::env::temp_dir().join(format!("smesh-quant-badwalk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let log = RunLog::create(&dir).unwrap();
+        let mut b = board(&log);
+        let samples = vec![sample(100.0, 100.0, 0.4, 0.6, true); 50];
+        for test_days in [0, -2] {
+            let cfg = CryptoConfig {
+                test_days,
+                ..CryptoConfig::default()
+            };
+            let out = walk_forward(&log, &mut b, &samples, &cfg);
+            assert_eq!(out["windows"], 0);
+            assert!(out["error"].is_string());
+        }
+        // The empty path keeps the summary's shape.
+        let out = walk_forward(&log, &mut b, &[], &CryptoConfig::default());
+        assert_eq!(
+            (out["windows"].as_u64(), out["test_predictions"].as_u64()),
+            (Some(0), Some(0))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
