@@ -15,7 +15,7 @@ use smesh_a2a::{
 };
 use smesh_agent::{
     AffinitySource, AgentConfig, AgentCoordinator, AgentRole, CoordinatorConfig, JevAffinity,
-    LlmAgent, OpenRouterClient, OpenRouterConfig,
+    JevClient, LlmAgent, OpenRouterClient, OpenRouterConfig,
 };
 
 /// `smesh a2a` subcommands.
@@ -47,6 +47,12 @@ pub enum A2aCommand {
         /// TYPESAFE_API_KEY or ~/.creds/typesafe.env.
         #[arg(long)]
         jev: bool,
+
+        /// Add a research agent ("Quant") that answers from a finished
+        /// `smesh quant run` directory. Jev picks the relevant findings.
+        /// Needs --jev.
+        #[arg(long)]
+        quant_run: Option<std::path::PathBuf>,
 
         /// OpenRouter model for local agents
         #[arg(short, long, default_value = "google/gemini-2.5-flash-lite")]
@@ -93,6 +99,7 @@ pub async fn run(command: A2aCommand) -> Result<()> {
             agents,
             described,
             jev,
+            quant_run,
             model,
             recruit,
             sign_key,
@@ -103,6 +110,7 @@ pub async fn run(command: A2aCommand) -> Result<()> {
                 agents,
                 described,
                 jev,
+                quant_run,
                 model,
                 recruit,
                 sign_key,
@@ -199,6 +207,7 @@ struct ServeOptions {
     agents: Option<usize>,
     described: Vec<String>,
     jev: bool,
+    quant_run: Option<std::path::PathBuf>,
     model: String,
     recruit: Vec<String>,
     sign_key: Option<std::path::PathBuf>,
@@ -224,6 +233,22 @@ async fn serve(opts: ServeOptions) -> Result<()> {
         .agents
         .unwrap_or(if described.is_empty() { 4 } else { 0 });
 
+    if opts.quant_run.is_some() && !opts.jev {
+        bail!("--quant-run needs --jev: the research agent is routed to, and picks its findings, by Jev");
+    }
+    let quant = match &opts.quant_run {
+        Some(dir) => {
+            let backend = smesh_quant::agent::FindingsBackend::load(dir, JevClient::from_env())
+                .with_context(|| format!("loading research run {}", dir.display()))?;
+            println!(
+                "✓ research agent Quant answers from {} ({} findings)",
+                dir.display(),
+                backend.findings().len()
+            );
+            Some(Arc::new(backend))
+        }
+        None => None,
+    };
     if !described.is_empty() && !opts.jev {
         bail!(
             "--agent needs --jev: an agent described in words can only be matched to tasks \
@@ -243,7 +268,7 @@ async fn serve(opts: ServeOptions) -> Result<()> {
     if local > 0 && OpenRouterConfig::from_env().is_none() {
         bail!("OpenRouter not configured. Set OPENROUTER_API_KEY (or add it to ~/.creds/openrouter.env)");
     }
-    if local == 0 && opts.recruit.is_empty() {
+    if local == 0 && quant.is_none() && opts.recruit.is_empty() {
         bail!("a mesh with no local agents needs at least one --recruit");
     }
 
@@ -283,6 +308,13 @@ async fn serve(opts: ServeOptions) -> Result<()> {
                 AgentConfig::new(name.clone(), AgentRole::General)
                     .with_capability(capability.clone()),
                 Arc::new(backend),
+            ));
+        }
+        if let Some(backend) = &quant {
+            coordinator.add_agent(LlmAgent::new(
+                AgentConfig::new("Quant", AgentRole::Analyst)
+                    .with_capability(smesh_quant::agent::CAPABILITY),
+                Arc::clone(backend) as Arc<dyn smesh_agent::LlmBackend>,
             ));
         }
         for remote in &remotes {
