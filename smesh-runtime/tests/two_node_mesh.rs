@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use smesh_core::{Network, Node, NodeId, Signal, SignalType};
+use smesh_core::{DecayFunction, Network, Node, NodeId, Signal, SignalType};
 use smesh_runtime::{MeshConfig, MeshHandle, RuntimeConfig, SmeshRuntime, TransportMessage};
 
 const LOCALHOST: &str = "127.0.0.1:0";
@@ -52,15 +52,16 @@ impl MeshNode {
         anti_entropy_ms: u64,
     ) -> Self {
         let mut node = Node::named(name);
-        // Trust the peers we will actually talk to, so the probabilistic relay
-        // policy does not make these tests flaky.
-        node.trust_scores.insert("node-a".to_string(), 0.99);
-        node.trust_scores.insert("node-b".to_string(), 0.99);
-        node.trust_scores.insert("node-c".to_string(), 0.99);
+        // Trust the peers we will actually talk to fully. A node relays when a
+        // uniform roll in [0, 1) falls under confidence * intensity * trust *
+        // (remaining hops / radius), so trust is a factor in that score, not a
+        // guarantee: at 0.99 one relay in a hundred was declined, and a test
+        // with no anti-entropy to resend the claim failed in CI that way.
         for peer in [
-            "left", "middle", "right", "early", "late", "stayer", "leaver",
+            "node-a", "node-b", "node-c", "left", "middle", "right", "early", "late", "stayer",
+            "leaver",
         ] {
-            node.trust_scores.insert(peer.to_string(), 0.99);
+            node.trust_scores.insert(peer.to_string(), 1.0);
         }
         let node_id = node.id.clone();
 
@@ -163,6 +164,20 @@ impl MeshNode {
             .expect("emitted")
     }
 
+    /// A claim the relay policy cannot decline at its first hop.
+    ///
+    /// Full trust alone leaves the score a hair under 1: the receiver
+    /// recomputes intensity from the claim's age, and exponential decay has
+    /// taken something off by then. Step decay holds intensity at 1.0 until
+    /// expiry, so with confidence 1, full trust and the whole hop budget left
+    /// the score is exactly 1 and no roll in [0, 1) can exceed it.
+    async fn emit_undecaying_claim(&self, payload: &str) -> String {
+        self.runtime
+            .emit(undecaying_claim(payload), &self.node_id)
+            .await
+            .expect("emitted")
+    }
+
     async fn shutdown(self) {
         self.handle.shutdown().await;
     }
@@ -184,6 +199,38 @@ where
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
+}
+
+/// See [`MeshNode::emit_undecaying_claim`].
+fn undecaying_claim(payload: &str) -> Signal {
+    Signal::builder(SignalType::Alert)
+        .correlatable()
+        .payload(payload.as_bytes().to_vec())
+        .intensity(1.0)
+        .confidence(1.0)
+        .decay_function(DecayFunction::Step)
+        .ttl(120.0)
+        .radius(4)
+        .build()
+}
+
+#[test]
+fn the_relay_tests_claim_cannot_be_declined_at_its_first_hop() {
+    // a_claim_crosses_a_node_that_is_neither_end relies on this. If it stops
+    // holding, that test goes back to failing about one run in a hundred;
+    // this one fails every time instead.
+    let mut middle = Node::named("middle");
+    middle.trust_scores.insert("left".to_string(), 1.0);
+    let mut claim = undecaying_claim("carried by someone else");
+    claim.origin_node_id = "left".to_string();
+    // Arrived with a little age on it, as it does over the wire.
+    let later = claim.created_at + chrono::Duration::milliseconds(250);
+    claim.current_intensity = claim.compute_intensity(later);
+
+    let largest_roll = 1.0 - f64::EPSILON;
+    let decision = middle.relay_decision_with(&claim, claim.radius, largest_roll);
+    assert_eq!(decision.propagation_score, 1.0);
+    assert!(decision.relay);
 }
 
 #[tokio::test]
@@ -611,7 +658,10 @@ async fn a_claim_crosses_a_node_that_is_neither_end() {
         "the ends must not be directly connected or the test proves nothing"
     );
 
-    let hash = left.emit_claim("carried by someone else").await;
+    // Relaying is deliberately probabilistic. This test is about whether the
+    // relay path works, so it sends a claim the policy cannot decline; whether
+    // the policy's odds are right is tested in smesh-core.
+    let hash = left.emit_undecaying_claim("carried by someone else").await;
 
     eventually(
         Duration::from_secs(10),
