@@ -80,19 +80,27 @@ impl AgentRole {
     }
 
     /// Get system prompt for this role
+    ///
+    /// The prompt deliberately does not mention SMESH or signals. Coordination
+    /// happens before the model is called; the model only does the work. Told
+    /// it "coordinates through a signal-based system (SMESH)", models invented
+    /// a protocol to perform in every reply ("SMESH: Starting code_write
+    /// task.", "SMESH_START ... SMESH_END", JSON envelopes), and that reached
+    /// whoever asked, A2A clients included.
     pub fn system_prompt(&self, name: &str) -> String {
         let role_desc = match self {
-            AgentRole::Coder => "expert software developer",
-            AgentRole::Reviewer => "code reviewer and quality specialist",
-            AgentRole::Analyst => "technical analyst and researcher",
-            AgentRole::Writer => "technical writer and documentation specialist",
-            AgentRole::General => "general-purpose AI assistant",
+            AgentRole::Coder => "an expert software developer",
+            AgentRole::Reviewer => "a code reviewer and quality specialist",
+            AgentRole::Analyst => "a technical analyst and researcher",
+            AgentRole::Writer => "a technical writer and documentation specialist",
+            AgentRole::General => "a general-purpose AI assistant",
         };
 
         format!(
-            "You are {}, a {}. You coordinate with other agents through \
-             a signal-based system (SMESH). Be concise and focused on the task.",
-            name, role_desc
+            "You are {name}, {role_desc}. Your reply is the finished work itself \
+             and goes straight to the person who asked for it. Write only the \
+             result: no status lines, headers, protocol markers or notes about \
+             the task. Be concise and focused."
         )
     }
 }
@@ -459,6 +467,24 @@ pub enum AgentAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_system_prompt_does_not_invite_protocol_framing() {
+        for role in [
+            AgentRole::Coder,
+            AgentRole::Reviewer,
+            AgentRole::Analyst,
+            AgentRole::Writer,
+            AgentRole::General,
+        ] {
+            let prompt = role.system_prompt("Agent-1");
+            assert!(prompt.starts_with("You are Agent-1, a"), "{prompt}");
+            // Naming the coordination protocol made models perform it in
+            // their replies; see `AgentRole::system_prompt`.
+            assert!(!prompt.contains("SMESH"), "{prompt}");
+            assert!(!prompt.to_lowercase().contains("signal"), "{prompt}");
+        }
+    }
 
     #[test]
     fn test_agent_creation() {
