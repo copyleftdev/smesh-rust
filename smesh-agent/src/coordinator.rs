@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
+use crate::affinity::AffinitySource;
 use crate::agent::{
     AgentAction, AgentConfig, AgentRole, AgentTask, LlmAgent, TaskStatus, TaskType,
 };
@@ -49,9 +50,26 @@ impl Default for CoordinatorConfig {
 /// Task definition for the coordinator
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskDefinition {
+    /// An optional label. One of [`TaskType`]'s names lets agents claim the
+    /// task from their role table; any other label, or an empty one, means
+    /// only an [`AffinitySource`] assessment can make an agent claim it.
+    #[serde(default)]
     pub task_type: String,
+    /// The task, in plain language.
     pub description: String,
+    /// Priority from 0.0 to 1.0.
     pub priority: f64,
+}
+
+impl TaskDefinition {
+    /// A task with no type label: any domain, routed by assessment alone.
+    pub fn untyped(description: impl Into<String>, priority: f64) -> Self {
+        Self {
+            task_type: String::new(),
+            description: description.into(),
+            priority,
+        }
+    }
 }
 
 /// The claim and back-off events from one settlement round (for tracing/viz).
@@ -69,7 +87,16 @@ pub struct AgentInfo {
     pub id: NodeId,
     pub name: String,
     pub role: String,
+    /// What the agent does, in plain language.
+    pub capability: String,
+    /// Built-in task types this agent's role table rates at
+    /// [`SPECIALTY_LEVEL`] or above. Lets a peer without an affinity source
+    /// still match it by type; empty for agents described in words alone.
+    pub specialties: Vec<String>,
 }
+
+/// The role-table level at which a task type counts as an agent's specialty.
+pub const SPECIALTY_LEVEL: f64 = 0.8;
 
 /// One task carried out by the agent that won it.
 #[derive(Debug, Clone)]
@@ -130,6 +157,8 @@ pub struct AgentCoordinator {
     completed: Vec<String>,
     /// Current tick
     tick: u64,
+    /// Judges how well each agent suits each task. `None` uses role tables.
+    affinity: Option<Arc<dyn AffinitySource>>,
 }
 
 impl AgentCoordinator {
@@ -164,7 +193,63 @@ impl AgentCoordinator {
             tasks: HashMap::new(),
             completed: Vec::new(),
             tick: 0,
+            affinity: None,
         }
+    }
+
+    /// Use `source` to judge how well each agent suits each task, instead of
+    /// (or before falling back to) the role tables. See [`assess_task`].
+    ///
+    /// [`assess_task`]: Self::assess_task
+    pub fn with_affinity_source(mut self, source: Arc<dyn AffinitySource>) -> Self {
+        self.affinity = Some(source);
+        self
+    }
+
+    /// Whether agents assess tasks with an affinity source.
+    pub fn has_affinity_source(&self) -> bool {
+        self.affinity.is_some()
+    }
+
+    /// Have every agent assess how well it suits `task_id`.
+    ///
+    /// Each agent is judged on its own description alone, never against the
+    /// others, so the judgement is still each agent's own: ranking is left to
+    /// claims and back-offs in the field. The judgements run concurrently and
+    /// are cached on each agent, so settlement afterwards stays synchronous,
+    /// local and replayable. An agent the source gives no judgement for falls
+    /// back to its role table. Does nothing without an affinity source.
+    pub async fn assess_task(&mut self, task_id: &str) {
+        let (Some(source), Some(task)) = (self.affinity.clone(), self.tasks.get(task_id).cloned())
+        else {
+            return;
+        };
+        let agents: Vec<(NodeId, String)> = self
+            .agents
+            .iter()
+            .map(|(id, a)| (id.clone(), a.config.capability_text().to_string()))
+            .collect();
+        let judgements = futures::future::join_all(
+            agents
+                .iter()
+                .map(|(_, capability)| source.assess(&task, capability)),
+        )
+        .await;
+        for ((node_id, _), judgement) in agents.into_iter().zip(judgements) {
+            if let (Some(level), Some(agent)) = (judgement, self.agents.get_mut(&node_id)) {
+                debug!("{} assesses task {} at {:.2}", agent.name(), task_id, level);
+                agent
+                    .assessed
+                    .insert(task_id.to_string(), level.clamp(0.0, 1.0));
+            }
+        }
+    }
+
+    /// [`add_task`](Self::add_task), then [`assess_task`](Self::assess_task).
+    pub async fn add_task_assessed(&mut self, task: TaskDefinition) -> String {
+        let task_id = self.add_task(task);
+        self.assess_task(&task_id).await;
+        task_id
     }
 
     /// Create a coordinator with an OpenRouter backend.
@@ -229,10 +314,7 @@ impl AgentCoordinator {
 
         let mut task = AgentTask {
             id: task_id.to_string(),
-            task_type: task_def
-                .task_type
-                .parse::<TaskType>()
-                .unwrap_or(TaskType::Analysis),
+            task_type: task_def.task_type.parse::<TaskType>().ok(),
             description: task_def.description,
             priority: task_def.priority,
             status: TaskStatus::InProgress,
@@ -429,6 +511,12 @@ impl AgentCoordinator {
                 id: id.clone(),
                 name: agent.name().to_string(),
                 role: format!("{:?}", agent.config.role),
+                capability: agent.config.capability_text().to_string(),
+                specialties: TaskType::ALL
+                    .iter()
+                    .filter(|t| agent.skill(**t) >= SPECIALTY_LEVEL)
+                    .map(|t| t.as_str().to_string())
+                    .collect(),
             })
             .collect();
         roster.sort_by(|a, b| a.name.cmp(&b.name));
@@ -477,10 +565,7 @@ impl AgentCoordinator {
             None => return false,
         };
 
-        let task_type = task_def
-            .task_type
-            .parse::<TaskType>()
-            .unwrap_or(TaskType::Analysis);
+        let task_type = task_def.task_type.parse::<TaskType>().ok();
 
         let mut task = AgentTask {
             id: task_id.to_string(),
@@ -513,7 +598,7 @@ impl AgentCoordinator {
 
         // Add all tasks (emits task_available signals).
         for task in tasks {
-            self.add_task(task);
+            self.add_task_assessed(task).await;
         }
 
         let total_tasks = self.tasks.len();
@@ -706,5 +791,166 @@ mod tests {
             .filter(|s| parse_claim(s).is_some())
             .count();
         assert_eq!(surviving, 2, "one surviving claim per task after back-off");
+    }
+
+    // ---- assessment: agents described in plain language, any domain ----
+
+    /// Says an agent suits a task when the task mentions a word from the
+    /// agent's capability, with a level set per capability word.
+    struct KeywordAffinity(Vec<(&'static str, &'static str, f64)>);
+
+    #[async_trait::async_trait]
+    impl AffinitySource for KeywordAffinity {
+        async fn assess(&self, task: &TaskDefinition, capability: &str) -> Option<f64> {
+            let task = task.description.to_lowercase();
+            self.0
+                .iter()
+                .find(|(cap, word, _)| capability.contains(cap) && task.contains(word))
+                .map(|(_, _, level)| *level)
+                .or(Some(0.05))
+        }
+    }
+
+    /// Answers nothing, as a failing service would.
+    struct Silent;
+
+    #[async_trait::async_trait]
+    impl AffinitySource for Silent {
+        async fn assess(&self, _: &TaskDefinition, _: &str) -> Option<f64> {
+            None
+        }
+    }
+
+    fn described(name: &str, capability: &str) -> LlmAgent {
+        let config = AgentConfig::new(name, AgentRole::General).with_capability(capability);
+        LlmAgent::new(
+            config,
+            Arc::new(OpenRouterClient::new(OpenRouterConfig::default())),
+        )
+    }
+
+    fn empty_mesh() -> AgentCoordinator {
+        AgentCoordinator::with_openrouter(
+            CoordinatorConfig {
+                n_agents: 0,
+                ..Default::default()
+            },
+            "test-model",
+        )
+    }
+
+    fn winner_name(coord: &AgentCoordinator, task_id: &str) -> Option<String> {
+        let node = coord.winner_for(task_id)?;
+        Some(coord.agents[&node].name().to_string())
+    }
+
+    #[tokio::test]
+    async fn test_untyped_task_goes_to_the_agent_whose_description_fits() {
+        let mut coord = empty_mesh().with_affinity_source(Arc::new(KeywordAffinity(vec![
+            ("translator", "translate", 0.95),
+            ("contracts", "clause", 0.92),
+        ])));
+        coord.add_agent(described(
+            "Translator",
+            "a translator between English and Portuguese",
+        ));
+        coord.add_agent(described("Contracts", "a reviewer of commercial contracts"));
+
+        let t = coord
+            .add_task_assessed(TaskDefinition::untyped("Translate the refund policy", 0.5))
+            .await;
+        let c = coord
+            .add_task_assessed(TaskDefinition::untyped(
+                "Is this renewal clause risky?",
+                0.5,
+            ))
+            .await;
+        settle(&mut coord);
+
+        assert_eq!(winner_name(&coord, &t).as_deref(), Some("Translator"));
+        assert_eq!(winner_name(&coord, &c).as_deref(), Some("Contracts"));
+    }
+
+    #[tokio::test]
+    async fn test_task_no_agent_suits_is_left_unclaimed() {
+        let mut coord = empty_mesh().with_affinity_source(Arc::new(KeywordAffinity(vec![(
+            "translator",
+            "translate",
+            0.95,
+        )])));
+        coord.add_agent(described("Translator", "a translator"));
+        let id = coord
+            .add_task_assessed(TaskDefinition::untyped("Bake a sourdough loaf", 0.5))
+            .await;
+        settle(&mut coord);
+        assert_eq!(coord.winner_for(&id), None);
+    }
+
+    #[tokio::test]
+    async fn test_untyped_task_without_a_source_is_unclaimed() {
+        let mut coord = empty_mesh();
+        coord.add_agent(described("Translator", "a translator"));
+        let id = coord
+            .add_task_assessed(TaskDefinition::untyped("Translate this", 0.5))
+            .await;
+        settle(&mut coord);
+        assert_eq!(coord.winner_for(&id), None);
+    }
+
+    #[tokio::test]
+    async fn test_assessment_overrides_the_role_table() {
+        // By the table, a Reviewer (0.95) beats a Writer (0.5) on code_review.
+        // The task is really about prose, and the assessment says so.
+        let mut coord = AgentCoordinator::with_openrouter(
+            CoordinatorConfig {
+                n_agents: 2,
+                roles: vec![AgentRole::Reviewer, AgentRole::Writer],
+                ..Default::default()
+            },
+            "test-model",
+        )
+        .with_affinity_source(Arc::new(KeywordAffinity(vec![
+            ("technical writer", "wording", 0.98),
+            ("code reviewer", "wording", 0.55),
+        ])));
+        let id = coord
+            .add_task_assessed(TaskDefinition {
+                task_type: "code_review".into(),
+                description: "Review the wording of our error messages".into(),
+                priority: 0.5,
+            })
+            .await;
+        settle(&mut coord);
+        assert_eq!(winner_name(&coord, &id).as_deref(), Some("Writer-2"));
+    }
+
+    #[tokio::test]
+    async fn test_failed_assessment_falls_back_to_the_role_table() {
+        let mut coord = AgentCoordinator::with_openrouter(
+            CoordinatorConfig {
+                n_agents: 2,
+                roles: vec![AgentRole::Reviewer, AgentRole::Writer],
+                ..Default::default()
+            },
+            "test-model",
+        )
+        .with_affinity_source(Arc::new(Silent));
+        let id = coord
+            .add_task_assessed(TaskDefinition {
+                task_type: "code_review".into(),
+                description: "Review the wording of our error messages".into(),
+                priority: 0.5,
+            })
+            .await;
+        settle(&mut coord);
+        assert_eq!(winner_name(&coord, &id).as_deref(), Some("Reviewer-1"));
+    }
+
+    #[test]
+    fn test_roster_carries_each_agents_capability() {
+        let mut coord = empty_mesh();
+        coord.add_agent(described("Tutor", "a maths tutor for school students"));
+        let roster = coord.agent_roster();
+        assert_eq!(roster[0].capability, "a maths tutor for school students");
     }
 }

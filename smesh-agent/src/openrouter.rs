@@ -491,7 +491,7 @@ fn candidate_env_files() -> Vec<std::path::PathBuf> {
 /// The value of `key` in a dotenv file. A key assigned more than once takes
 /// its last value, as `source` and dotenv loaders do: a file with an old key
 /// above a new one means the new one.
-fn read_key_from_file(path: &std::path::Path, key: &str) -> Option<String> {
+pub(crate) fn read_key_from_file(path: &std::path::Path, key: &str) -> Option<String> {
     let contents = std::fs::read_to_string(path).ok()?;
     let mut found = None;
     for line in contents.lines() {
