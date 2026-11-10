@@ -1,0 +1,27 @@
+# SMESH
+
+> A Rust protocol for coordinating agents through signals that diffuse, decay and get reinforced. Consensus emerges from reinforcement rather than voting, with no central coordinator.
+
+This site replays one recorded, read-only quant research run. Every count on it comes from data/replay.json, exported from the run's journal with `smesh quant export-site`.
+
+## What it is
+
+- Signals: messages with an intensity that decays over time; reinforcement restores them.
+- Field: the shared space signals live on. A claim nothing reinforces fades away.
+- Settlement: agents claim tasks with their own affinity and back off from stronger claims.
+- A2A v1.0: the mesh serves as one A2A agent and can recruit other A2A agents as members.
+- Jev (TypeSafe AI): agents described in plain language judge for themselves whether they suit a task.
+
+## The study on this page
+
+- Venues: Kalshi (public market data, unsigned), Massive (licensed key), Kraken (public trades). Read-only by construction: only GET to allowlisted market-data paths.
+- Crypto track: Kalshi hourly BTC/ETH above/below odds 30 minutes before close vs a realized-volatility model, walk-forward with fee-aware paper trading.
+- Macro track: Kalshi CPI, payrolls and Fed ladders an hour before release vs the actual print, last print and climatology; SPY/TLT reaction to the surprise.
+- Hypotheses are signals on a SMESH field. Consensus means a final strength of 0.30 or more.
+- Limits: one recorded period; several claims share windows; macro windows hold one release each. Not trading advice.
+
+## Links
+
+- Source: https://github.com/copyleftdev/smesh-rust
+- Replay data: https://copyleftdev.github.io/smesh-rust/data/replay.json
+- Page in Markdown: https://copyleftdev.github.io/smesh-rust/index.md
