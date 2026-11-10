@@ -13,7 +13,10 @@ use smesh_a2a::{
     key_id, mesh_card, sign_card, CoordinatorFactory, MeshCardConfig, RemoteAgent,
     RemoteAgentOptions,
 };
-use smesh_agent::{AgentCoordinator, AgentRole, CoordinatorConfig, OpenRouterConfig};
+use smesh_agent::{
+    AffinitySource, AgentConfig, AgentCoordinator, AgentRole, CoordinatorConfig, JevAffinity,
+    LlmAgent, OpenRouterClient, OpenRouterConfig,
+};
 
 /// `smesh a2a` subcommands.
 #[derive(Subcommand)]
@@ -28,9 +31,22 @@ pub enum A2aCommand {
         #[arg(long)]
         public_url: Option<String>,
 
-        /// Number of local agents (roles cycle Coder, Reviewer, Analyst, Writer)
-        #[arg(short, long, default_value = "4")]
-        agents: usize,
+        /// Number of role agents (cycling Coder, Reviewer, Analyst, Writer).
+        /// Default 4, or 0 when --agent is given.
+        #[arg(short, long)]
+        agents: Option<usize>,
+
+        /// An agent described in plain language, as NAME=CAPABILITY, phrased to
+        /// follow "You are NAME, ...". Repeatable. Needs --jev.
+        /// Example: --agent "Translator=a translator between English and Portuguese"
+        #[arg(long = "agent", value_name = "NAME=CAPABILITY")]
+        described: Vec<String>,
+
+        /// Have each agent judge whether it suits each task with Jev
+        /// (TypeSafe), instead of the built-in software role tables. Reads
+        /// TYPESAFE_API_KEY or ~/.creds/typesafe.env.
+        #[arg(long)]
+        jev: bool,
 
         /// OpenRouter model for local agents
         #[arg(short, long, default_value = "google/gemini-2.5-flash-lite")]
@@ -51,8 +67,8 @@ pub enum A2aCommand {
         #[arg(long, default_value = "http://127.0.0.1:7410")]
         url: String,
 
-        /// Task type (code_write, code_review, testing, documentation, analysis);
-        /// inferred from the text if omitted
+        /// Optional task type label, e.g. code_review. Only agents without an
+        /// assessment use it; any label is accepted
         #[arg(short, long)]
         task_type: Option<String>,
 
@@ -75,10 +91,24 @@ pub async fn run(command: A2aCommand) -> Result<()> {
             listen,
             public_url,
             agents,
+            described,
+            jev,
             model,
             recruit,
             sign_key,
-        } => serve(listen, public_url, agents, model, recruit, sign_key).await,
+        } => {
+            serve(ServeOptions {
+                listen,
+                public_url,
+                agents,
+                described,
+                jev,
+                model,
+                recruit,
+                sign_key,
+            })
+            .await
+        }
         A2aCommand::Send {
             url,
             task_type,
@@ -125,6 +155,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_parse_described_splits_name_and_capability() {
+        assert_eq!(
+            parse_described("Translator = a translator, EN to PT").unwrap(),
+            ("Translator".into(), "a translator, EN to PT".into())
+        );
+        // Only the first '=' separates; the capability may contain more.
+        assert_eq!(parse_described("A=x=y").unwrap().1, "x=y");
+        assert!(parse_described("no-equals").is_err());
+        assert!(parse_described("=empty name").is_err());
+        assert!(parse_described("Empty=").is_err());
+    }
+
+    #[test]
     fn test_parse_signing_key_reads_hex_seed() {
         let key = parse_signing_key(&format!("{}\n", "0a".repeat(32))).unwrap();
         assert_eq!(key.to_bytes(), [0x0a; 32]);
@@ -149,39 +192,73 @@ mod tests {
     }
 }
 
-async fn serve(
+/// Everything `smesh a2a serve` was given.
+struct ServeOptions {
     listen: String,
     public_url: Option<String>,
-    agents: usize,
+    agents: Option<usize>,
+    described: Vec<String>,
+    jev: bool,
     model: String,
     recruit: Vec<String>,
     sign_key: Option<std::path::PathBuf>,
-) -> Result<()> {
-    if agents > 0 && OpenRouterConfig::from_env().is_none() {
+}
+
+/// Split `NAME=CAPABILITY`.
+fn parse_described(spec: &str) -> Result<(String, String)> {
+    let (name, capability) = spec
+        .split_once('=')
+        .map(|(n, c)| (n.trim(), c.trim()))
+        .filter(|(n, c)| !n.is_empty() && !c.is_empty())
+        .with_context(|| format!("--agent {spec:?} must be NAME=CAPABILITY"))?;
+    Ok((name.to_string(), capability.to_string()))
+}
+
+async fn serve(opts: ServeOptions) -> Result<()> {
+    let described: Vec<(String, String)> = opts
+        .described
+        .iter()
+        .map(|s| parse_described(s))
+        .collect::<Result<_>>()?;
+    let role_agents = opts
+        .agents
+        .unwrap_or(if described.is_empty() { 4 } else { 0 });
+
+    if !described.is_empty() && !opts.jev {
+        bail!(
+            "--agent needs --jev: an agent described in words can only be matched to tasks \
+             by assessment; without it, it would claim like a general-purpose role"
+        );
+    }
+    let affinity = if opts.jev {
+        let source = JevAffinity::from_env().context(
+            "Jev not configured. Set TYPESAFE_API_KEY (or add it to ~/.creds/typesafe.env)",
+        )?;
+        println!("✓ agents assess tasks with Jev");
+        Some(Arc::new(source) as Arc<dyn AffinitySource>)
+    } else {
+        None
+    };
+    let local = role_agents + described.len();
+    if local > 0 && OpenRouterConfig::from_env().is_none() {
         bail!("OpenRouter not configured. Set OPENROUTER_API_KEY (or add it to ~/.creds/openrouter.env)");
     }
-    if agents == 0 && recruit.is_empty() {
+    if local == 0 && opts.recruit.is_empty() {
         bail!("a mesh with no local agents needs at least one --recruit");
     }
 
     let mut remotes = Vec::new();
-    for url in &recruit {
+    for url in &opts.recruit {
         let remote = RemoteAgent::discover(url, RemoteAgentOptions::default())
             .await
             .with_context(|| format!("recruiting {url}"))?;
-        let mut skills: Vec<_> = remote.skills.keys().map(|t| t.as_str()).collect();
-        skills.sort();
-        println!(
-            "✓ recruited {} ({url}) for {}",
-            remote.card.name,
-            skills.join(", ")
-        );
+        println!("✓ recruited {} ({url})", remote.card.name);
         remotes.push(Arc::new(remote));
     }
 
     let config = CoordinatorConfig {
-        n_agents: agents,
-        model: model.clone(),
+        n_agents: role_agents,
+        model: opts.model.clone(),
         roles: vec![
             AgentRole::Coder,
             AgentRole::Reviewer,
@@ -190,26 +267,52 @@ async fn serve(
         ],
         ..CoordinatorConfig::default()
     };
+    let model = opts.model.clone();
     let factory: CoordinatorFactory = Arc::new(move || {
         let mut coordinator = AgentCoordinator::with_openrouter(config.clone(), &model);
+        if let Some(source) = &affinity {
+            coordinator = coordinator.with_affinity_source(Arc::clone(source));
+        }
+        for (name, capability) in &described {
+            let backend = OpenRouterClient::new(
+                OpenRouterConfig::from_env()
+                    .unwrap_or_default()
+                    .with_model(model.clone()),
+            );
+            coordinator.add_agent(LlmAgent::new(
+                AgentConfig::new(name.clone(), AgentRole::General)
+                    .with_capability(capability.clone()),
+                Arc::new(backend),
+            ));
+        }
         for remote in &remotes {
             coordinator.add_agent(remote.to_llm_agent());
         }
         coordinator
     });
 
-    let listener = tokio::net::TcpListener::bind(&listen)
+    let listener = tokio::net::TcpListener::bind(&opts.listen)
         .await
-        .with_context(|| format!("binding {listen}"))?;
-    let base = public_url.unwrap_or_else(|| format!("http://{}", listener.local_addr().unwrap()));
-    let mut card = mesh_card(&MeshCardConfig::new(base.clone()));
-    if let Some(path) = sign_key {
+        .with_context(|| format!("binding {}", opts.listen))?;
+    let base = opts
+        .public_url
+        .unwrap_or_else(|| format!("http://{}", listener.local_addr().unwrap()));
+    let roster = factory().agent_roster();
+    let mut card = mesh_card(&MeshCardConfig::new(base.clone()), &roster);
+    if let Some(path) = opts.sign_key {
         let key = read_signing_key(&path)?;
         sign_card(&mut card, &key);
         println!("✓ card signed by {}", key_id(&key.verifying_key()));
     }
 
     println!("SMESH A2A gateway");
+    for agent in &roster {
+        println!(
+            "  agent    {}: {}",
+            agent.name,
+            agent.capability.lines().next().unwrap_or("")
+        );
+    }
     println!("  card     {base}/.well-known/agent-card.json");
     println!("  JSON-RPC POST {base}/");
     println!("  REST     POST {base}/message:send");

@@ -11,11 +11,13 @@
 //! - Agent nodes that use LLM for decision-making
 //! - Task coordination via SMESH signals
 
+pub mod affinity;
 pub mod agent;
 pub mod backend;
 pub mod claude;
 pub mod constitutional;
 pub mod coordinator;
+pub mod jev;
 pub mod openrouter;
 pub mod streaming;
 
@@ -61,8 +63,10 @@ pub use constitutional::{
 };
 
 // Agent system
-pub use agent::{AgentConfig, AgentRole, AgentTask, LlmAgent, TaskType};
+pub use affinity::AffinitySource;
+pub use agent::{system_prompt_for, AgentConfig, AgentRole, AgentTask, LlmAgent, TaskType};
 pub use coordinator::{
     AgentCoordinator, AgentInfo, BackendFactory, CoordinatorConfig, CoordinatorResult,
-    ExecuteError, ExecutedTask, RoundTrace, TaskDefinition,
+    ExecuteError, ExecutedTask, RoundTrace, TaskDefinition, SPECIALTY_LEVEL,
 };
+pub use jev::{JevAffinity, JevClient, JevConfig, JevError};

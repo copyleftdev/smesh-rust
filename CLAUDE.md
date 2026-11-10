@@ -35,7 +35,7 @@ smesh-rust/
 # Build (release optimized with LTO)
 cargo build --release
 
-# Run all tests (332 tests)
+# Run all tests (355 tests; 1 live eval is #[ignore]d)
 cargo test --workspace
 
 # Run specific crate tests
@@ -81,6 +81,15 @@ cargo run --bin smesh -- threat --path ./payloads --limit 20
 cargo run --bin smesh -- a2a serve --listen 127.0.0.1:7410 --recruit http://other-agent
 cargo run --bin smesh -- a2a send --url http://127.0.0.1:7410 -t code_review "Review ..."
 cargo run --bin smesh -- a2a card http://127.0.0.1:7410
+
+# A mesh of agents in any domain, described in plain language; each agent
+# judges whether it suits a task with Jev (TypeSafe), then signals settle it
+cargo run --bin smesh -- a2a serve --jev \
+  --agent "Translator=a translator between English and Portuguese" \
+  --agent "Contracts=a reviewer of commercial contracts who flags risky clauses"
+
+# Live routing eval against Jev (needs TYPESAFE_API_KEY)
+cargo test -p smesh-agent --test jev_routing_eval -- --ignored --nocapture
 ```
 
 ## Code Style
@@ -114,6 +123,8 @@ cargo run --bin smesh -- a2a card http://127.0.0.1:7410
 | CLI entry point | `smesh-cli/src/main.rs` |
 | A2A gateway (task ↔ signal lifecycle) | `smesh-a2a/src/gateway.rs` |
 | Remote A2A agents as mesh nodes | `smesh-a2a/src/remote.rs` |
+| Agent-task affinity from plain language | `smesh-agent/src/affinity.rs` |
+| Jev (TypeSafe System One) client | `smesh-agent/src/jev.rs` |
 
 ## Performance Targets
 
@@ -143,6 +154,8 @@ cargo run --bin smesh -- a2a card http://127.0.0.1:7410
 | `OPENROUTER_BASE_URL` | OpenRouter API base (default: `https://openrouter.ai/api/v1`) |
 | `OPENROUTER_MODEL` | Default model slug (default: `google/gemini-2.5-flash-lite`) |
 | `OPENROUTER_ENV_FILE` | Optional path to a dotenv file for the above (falls back to `~/.creds/openrouter.env`) |
+| `TYPESAFE_API_KEY` | Jev (TypeSafe) key for `--jev` / `JevAffinity` (also read from `~/.creds/typesafe.env` or `$TYPESAFE_ENV_FILE`) |
+| `TYPESAFE_MODEL` | Jev model alias (default: `jev-latest`) |
 | `RUST_LOG` | Tracing filter (e.g., `smesh=debug`) |
 
 ## Workflow Notes

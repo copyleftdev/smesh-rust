@@ -1,8 +1,9 @@
 //! The mesh's Agent Card, and signing and verifying Agent Cards.
 //!
 //! To an A2A client the whole mesh is one agent. Its card advertises one skill
-//! per task type the mesh can settle, because the task type is what the mesh's
-//! agents claim on (see [`crate::classify`]).
+//! per agent in the mesh, described by that agent's own capability, so the
+//! card says what this particular mesh can do in whatever domains its agents
+//! cover. Any task can be sent; one no agent suits comes back `REJECTED`.
 //!
 //! # Signatures
 //!
@@ -24,7 +25,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use base64::Engine;
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde_json::Value;
-use smesh_agent::TaskType;
+use smesh_agent::AgentInfo;
 
 /// Settings for the card the gateway serves.
 #[derive(Debug, Clone)]
@@ -44,10 +45,11 @@ impl MeshCardConfig {
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
             name: "SMESH mesh".into(),
-            description: "A mesh of LLM agents that settle who takes each task through \
+            description: "A mesh of agents that settle who takes each task through \
                           decaying, reinforced signals rather than a central dispatcher. \
-                          Set metadata.taskType to choose the skill; otherwise it is \
-                          inferred from the text."
+                          Each skill below is one agent. Send any task in plain language; \
+                          the agents judge for themselves whether they suit it, and a task \
+                          none of them suits is rejected."
                 .into(),
             version: env!("CARGO_PKG_VERSION").into(),
             base_url: base_url.into(),
@@ -55,8 +57,9 @@ impl MeshCardConfig {
     }
 }
 
-/// Build the card for the mesh gateway. Unsigned; see [`sign_card`].
-pub fn mesh_card(config: &MeshCardConfig) -> AgentCard {
+/// Build the card for a mesh whose agents are `roster`. Unsigned; see
+/// [`sign_card`].
+pub fn mesh_card(config: &MeshCardConfig, roster: &[AgentInfo]) -> AgentCard {
     let base = config.base_url.trim_end_matches('/').to_string();
     AgentCard {
         name: config.name.clone(),
@@ -74,7 +77,7 @@ pub fn mesh_card(config: &MeshCardConfig) -> AgentCard {
         },
         default_input_modes: vec!["text/plain".into(), "application/json".into()],
         default_output_modes: vec!["text/plain".into()],
-        skills: TaskType::ALL.iter().map(|t| skill_for(*t)).collect(),
+        skills: unique_ids(roster.iter().map(skill_for).collect()),
         provider: None,
         documentation_url: None,
         icon_url: None,
@@ -84,40 +87,45 @@ pub fn mesh_card(config: &MeshCardConfig) -> AgentCard {
     }
 }
 
-fn skill_for(task_type: TaskType) -> AgentSkill {
-    let (name, description, example) = match task_type {
-        TaskType::CodeWrite => (
-            "Write code",
-            "Implement a function, module or fix.",
-            "Implement a token-bucket rate limiter in Rust.",
-        ),
-        TaskType::CodeReview => (
-            "Review code",
-            "Review code for correctness, security and clarity.",
-            "Review this diff for concurrency bugs.",
-        ),
-        TaskType::Testing => (
-            "Write tests",
-            "Design and write tests for given code.",
-            "Write property tests for this parser.",
-        ),
-        TaskType::Documentation => (
-            "Write documentation",
-            "Write or improve documentation.",
-            "Write a README section on configuration.",
-        ),
-        TaskType::Analysis => (
-            "Analyse",
-            "Investigate a question and report findings.",
-            "Why would p99 latency double after a dependency upgrade?",
-        ),
-    };
+/// Make skill IDs unique, suffixing a repeat with its position (and further
+/// if that is taken too). Different names can still slug to the same ID, as
+/// `a2a:Foo` and `a2a-Foo` do, and a client that keys skills by ID would see
+/// only one of those agents.
+fn unique_ids(mut skills: Vec<AgentSkill>) -> Vec<AgentSkill> {
+    let mut seen = std::collections::HashSet::new();
+    for (i, skill) in skills.iter_mut().enumerate() {
+        let base = skill.id.clone();
+        let mut n = i + 1;
+        while !seen.insert(skill.id.clone()) {
+            skill.id = format!("{base}-{n}");
+            n += 1;
+        }
+    }
+    skills
+}
+
+fn skill_for(agent: &AgentInfo) -> AgentSkill {
+    let id: String = agent
+        .name
+        .to_lowercase()
+        .chars()
+        // Letters and digits in any script: an ASCII-only rule turned every
+        // name written in, say, Japanese into the same run of dashes.
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect();
     AgentSkill {
-        id: task_type.as_str().into(),
-        name: name.into(),
-        description: description.into(),
-        tags: vec![task_type.as_str().into(), "smesh".into()],
-        examples: Some(vec![example.into()]),
+        id,
+        name: agent.name.clone(),
+        description: agent.capability.clone(),
+        // Specialties as tags let a peer with no affinity source still match
+        // this agent by built-in task type (see `smesh_a2a::remote`).
+        tags: agent
+            .specialties
+            .iter()
+            .cloned()
+            .chain([agent.role.to_lowercase(), "smesh".into()])
+            .collect(),
+        examples: None,
         input_modes: None,
         output_modes: None,
         security_requirements: None,
@@ -299,22 +307,64 @@ mod tests {
         SigningKey::from_bytes(&[seed; 32])
     }
 
-    fn card() -> AgentCard {
-        mesh_card(&MeshCardConfig::new("http://127.0.0.1:7410/"))
+    pub(crate) fn roster() -> Vec<AgentInfo> {
+        vec![
+            AgentInfo {
+                id: "n1".into(),
+                name: "Translator".into(),
+                role: "General".into(),
+                capability: "a translator between English and Portuguese".into(),
+                specialties: vec![],
+            },
+            AgentInfo {
+                id: "n2".into(),
+                name: "Coder-2".into(),
+                role: "Coder".into(),
+                capability: "an expert software developer".into(),
+                specialties: vec!["code_write".into(), "testing".into()],
+            },
+        ]
+    }
+
+    fn agent(name: &str) -> AgentInfo {
+        AgentInfo {
+            id: name.into(),
+            name: name.into(),
+            role: "General".into(),
+            capability: "x".into(),
+            specialties: vec![],
+        }
     }
 
     #[test]
-    fn test_mesh_card_has_one_skill_per_task_type() {
-        let card = card();
+    fn test_skill_ids_are_unique_even_when_names_slug_alike() {
+        // ":" and "-" both slug to "-"; "a2a-foo-2" is taken by a real name.
+        let names = ["a2a:Foo", "a2a-Foo", "a2a-foo-2", "翻訳", "契約"];
+        let roster: Vec<_> = names.iter().map(|n| agent(n)).collect();
+        let card = mesh_card(&MeshCardConfig::new("http://x"), &roster);
         let ids: Vec<_> = card.skills.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["a2a-foo", "a2a-foo-2", "a2a-foo-2-3", "翻訳", "契約"]);
+        let unique: std::collections::HashSet<_> = ids.iter().collect();
+        assert_eq!(unique.len(), ids.len());
+    }
+
+    fn card() -> AgentCard {
+        mesh_card(&MeshCardConfig::new("http://127.0.0.1:7410/"), &roster())
+    }
+
+    #[test]
+    fn test_mesh_card_has_one_skill_per_agent_in_its_own_words() {
+        let card = card();
+        let skills: Vec<_> = card
+            .skills
+            .iter()
+            .map(|s| (s.id.as_str(), s.description.as_str()))
+            .collect();
         assert_eq!(
-            ids,
+            skills,
             [
-                "code_write",
-                "code_review",
-                "testing",
-                "documentation",
-                "analysis"
+                ("translator", "a translator between English and Portuguese"),
+                ("coder-2", "an expert software developer"),
             ]
         );
         assert_eq!(card.supported_interfaces[0].url, "http://127.0.0.1:7410");

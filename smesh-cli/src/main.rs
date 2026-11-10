@@ -1112,7 +1112,11 @@ async fn cmd_agents(n_agents: usize, model: &str, demo: bool) -> Result<()> {
             for task in tasks {
                 if let Some(ref result) = task.result {
                     let preview: String = result.chars().take(100).collect();
-                    println!("    [{}] {}...", task.task_type.as_str(), preview);
+                    println!(
+                        "    [{}] {}...",
+                        task.task_type.map(|t| t.as_str()).unwrap_or("task"),
+                        preview
+                    );
                 }
             }
         }

@@ -88,21 +88,32 @@ impl AgentRole {
     /// task.", "SMESH_START ... SMESH_END", JSON envelopes), and that reached
     /// whoever asked, A2A clients included.
     pub fn system_prompt(&self, name: &str) -> String {
-        let role_desc = match self {
+        system_prompt_for(name, self.capability())
+    }
+
+    /// This role as a plain-language capability: what an agent with no
+    /// description of its own says it does.
+    pub fn capability(&self) -> &'static str {
+        match self {
             AgentRole::Coder => "an expert software developer",
             AgentRole::Reviewer => "a code reviewer and quality specialist",
             AgentRole::Analyst => "a technical analyst and researcher",
             AgentRole::Writer => "a technical writer and documentation specialist",
             AgentRole::General => "a general-purpose AI assistant",
-        };
-
-        format!(
-            "You are {name}, {role_desc}. Your reply is the finished work itself \
-             and goes straight to the person who asked for it. Write only the \
-             result: no status lines, headers, protocol markers or notes about \
-             the task. Be concise and focused."
-        )
+        }
     }
+}
+
+/// The system prompt for an agent called `name` that does `capability`.
+///
+/// See [`AgentRole::system_prompt`] for why it never mentions SMESH.
+pub fn system_prompt_for(name: &str, capability: &str) -> String {
+    format!(
+        "You are {name}, {capability}. Your reply is the finished work itself \
+         and goes straight to the person who asked for it. Write only the \
+         result: no status lines, headers, protocol markers or notes about \
+         the task. Be concise and focused."
+    )
 }
 
 /// Types of tasks agents can handle
@@ -173,6 +184,15 @@ pub struct AgentConfig {
     /// the role's level for it.
     #[serde(default)]
     pub skill_overrides: Option<HashMap<TaskType, f64>>,
+    /// What this agent does, in plain language. Overrides the role's preset.
+    ///
+    /// This is what lets an agent be anything: a translator, a contract
+    /// reviewer, a tutor. An affinity source reads it to judge whether the
+    /// agent suits a task, and it becomes the agent's system prompt. Phrase it
+    /// to follow "You are <name>, ...", e.g. "a translator between English and
+    /// Portuguese".
+    #[serde(default)]
+    pub capability: Option<String>,
 }
 
 impl Default for AgentConfig {
@@ -184,6 +204,7 @@ impl Default for AgentConfig {
             affinity_threshold: 0.5,
             openrouter: Some(OpenRouterConfig::default()),
             skill_overrides: None,
+            capability: None,
         }
     }
 }
@@ -210,6 +231,19 @@ impl AgentConfig {
         self
     }
 
+    /// Describe what this agent does, in place of its role's preset.
+    pub fn with_capability(mut self, capability: impl Into<String>) -> Self {
+        self.capability = Some(capability.into());
+        self
+    }
+
+    /// What this agent does: its own description, or its role's preset.
+    pub fn capability_text(&self) -> &str {
+        self.capability
+            .as_deref()
+            .unwrap_or_else(|| self.role.capability())
+    }
+
     /// Replace the role's skill levels with these, per task type.
     pub fn with_skill_overrides(mut self, skills: HashMap<TaskType, f64>) -> Self {
         self.skill_overrides = Some(skills);
@@ -221,7 +255,8 @@ impl AgentConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentTask {
     pub id: String,
-    pub task_type: TaskType,
+    /// The task's type, when it has one of the built-in ones.
+    pub task_type: Option<TaskType>,
     pub description: String,
     pub priority: f64,
     pub status: TaskStatus,
@@ -257,6 +292,10 @@ pub struct LlmAgent {
     pub results: Vec<AgentTask>,
     /// Metrics
     pub llm_calls: u64,
+    /// This agent's own judgement of how well it suits each task, by task ID,
+    /// from an affinity source. It takes precedence over the role table, and
+    /// is what lets an agent claim a task that has no built-in type.
+    pub assessed: HashMap<String, f64>,
 }
 
 impl LlmAgent {
@@ -273,6 +312,7 @@ impl LlmAgent {
             conceded: Vec::new(),
             results: Vec::new(),
             llm_calls: 0,
+            assessed: HashMap::new(),
         }
     }
 
@@ -349,20 +389,46 @@ impl LlmAgent {
         }
     }
 
+    /// How strongly this agent would claim a task.
+    ///
+    /// Its own assessment for the task if it has one; otherwise the role table
+    /// for the task's type, if the type is a built-in one; otherwise `None`,
+    /// meaning the agent has no basis to claim it.
+    pub fn affinity_for(&self, task_id: &str, task_type: Option<&str>) -> Option<f64> {
+        if let Some(level) = self.assessed.get(task_id) {
+            return Some(*level);
+        }
+        task_type
+            .and_then(|t| t.parse::<TaskType>().ok())
+            .map(|t| self.skill(t))
+    }
+
+    /// The affinity this agent claims `task_id` with, if it would claim it at
+    /// all: it has capacity and its affinity reaches its threshold.
+    pub fn claim_level(&self, task_id: &str, task_type: Option<&str>) -> Option<f64> {
+        if !self.has_capacity() {
+            return None;
+        }
+        self.affinity_for(task_id, task_type)
+            .filter(|a| *a >= self.config.affinity_threshold)
+    }
+
     /// Execute a task using the LLM
     pub async fn execute_task(&mut self, task: &mut AgentTask) -> Result<String, LlmError> {
+        let type_line = task
+            .task_type
+            .map(|t| format!("Type: {}\n", t.as_str()))
+            .unwrap_or_default();
         let prompt = format!(
             "Execute this task:\n\n\
-             Type: {}\n\
+             {type_line}\
              Description: {}\n\
              Priority: {:.1}\n\n\
              Provide your work result. Be concise but complete.",
-            task.task_type.as_str(),
-            task.description,
-            task.priority
+            task.description, task.priority
         );
 
-        let system = self.config.role.system_prompt(&self.config.name);
+        let system = system_prompt_for(&self.config.name, self.config.capability_text());
 
         debug!("Agent {} executing task {}", self.config.name, task.id);
 
@@ -399,9 +465,7 @@ impl LlmAgent {
         match signal_type {
             "task_available" => {
                 let task_id = payload.get("task_id")?.as_str()?;
-                let task_type_str = payload.get("task_type")?.as_str()?;
-                let task_type = task_type_str.parse::<TaskType>().ok()?;
-                let priority = payload.get("priority")?.as_f64().unwrap_or(0.5);
+                let task_type = payload.get("task_type").and_then(|v| v.as_str());
 
                 // Skip if already in queue, or if we already yielded this task
                 // to a stronger claimant (stable back-off).
@@ -412,7 +476,7 @@ impl LlmAgent {
                 }
 
                 // Check if we should claim
-                if let Some(affinity) = self.should_claim(task_type, priority) {
+                if let Some(affinity) = self.claim_level(task_id, task_type) {
                     self.task_queue.push(task_id.to_string());
                     return Some(AgentAction::ClaimTask {
                         task_id: task_id.to_string(),
@@ -428,11 +492,8 @@ impl LlmAgent {
                 // Check for conflict
                 if self.task_queue.contains(&task_id.to_string()) && claimer != self.node.id {
                     // Back off if they have higher affinity
-                    let task_type_str = payload.get("task_type").and_then(|v| v.as_str());
-                    let our_affinity = task_type_str
-                        .and_then(|s| s.parse::<TaskType>().ok())
-                        .map(|tt| self.skill(tt))
-                        .unwrap_or(0.5);
+                    let task_type = payload.get("task_type").and_then(|v| v.as_str());
+                    let our_affinity = self.affinity_for(task_id, task_type).unwrap_or(0.5);
 
                     if their_affinity > our_affinity + 0.1 {
                         self.task_queue.retain(|id| id != task_id);

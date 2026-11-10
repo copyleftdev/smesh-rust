@@ -25,5 +25,6 @@ pub use card::{key_id, mesh_card, sign_card, verify_card, CardSignatureError, Me
 pub use classify::{task_from_message, ClassifyError};
 pub use gateway::{router, serve, CoordinatorFactory, MeshExecutor};
 pub use remote::{
-    affinities_from_card, A2aBackend, CardTrust, RemoteAgent, RemoteAgentOptions, RemoteError,
+    affinities_from_card, capability_from_card, A2aBackend, CardTrust, RemoteAgent,
+    RemoteAgentOptions, RemoteError,
 };
