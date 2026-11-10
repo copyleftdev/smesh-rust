@@ -14,6 +14,7 @@ smesh-runtime = { path = "../smesh-runtime" }
 smesh-agent = { path = "../smesh-agent" }
 smesh-bounty = { path = "../smesh-bounty" }
 smesh-a2a = { path = "../smesh-a2a" }
+smesh-quant = { path = "../smesh-quant" }
 a2a = { package = "a2a-lf", version = "0.4.2" }
 a2a-client = { package = "a2a-client-lf", version = "0.2.9" }
 ed25519-dalek = { workspace = true }
