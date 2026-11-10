@@ -60,6 +60,18 @@ impl Effect {
     }
 }
 
+/// How much an agent could do, for comparing claims: lower is less. An agent
+/// whose powers are unknown (a remote A2A agent, say) ranks above every known
+/// clearance, since nothing bounds what it might do.
+pub fn privilege_rank(privilege: Option<Effect>) -> u8 {
+    match privilege {
+        Some(Effect::Read) => 0,
+        Some(Effect::Write) => 1,
+        Some(Effect::Execute) => 2,
+        None => 3,
+    }
+}
+
 impl std::fmt::Display for Effect {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.pad(self.as_str())
@@ -289,6 +301,12 @@ impl Toolbelt {
     pub fn with_observer(mut self, observer: CallObserver) -> Self {
         self.observer = Some(observer);
         self
+    }
+
+    /// Change the most this agent may do (when it earns or loses trust).
+    /// The journal and the tools are kept.
+    pub fn set_clearance(&mut self, clearance: Effect) {
+        self.clearance = clearance;
     }
 
     /// The most this agent may do.

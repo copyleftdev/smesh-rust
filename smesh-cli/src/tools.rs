@@ -310,11 +310,21 @@ async fn ask(path: &Path, only: Option<&str>, model: Option<&str>, task: &str) -
     let id = coordinator
         .add_task_assessed(TaskDefinition::untyped(task, 0.5))
         .await;
+    let fits: Vec<(String, f64, Option<Effect>)> = coordinator
+        .agents()
+        .filter_map(|a| {
+            a.assessed
+                .get(&id)
+                .map(|l| (a.name().to_string(), *l, a.privilege()))
+        })
+        .collect();
     if assessed {
-        for agent in coordinator.agents() {
-            if let Some(level) = agent.assessed.get(&id) {
-                println!("· {} judges its fit at {:.0}%", agent.name(), level * 100.0);
-            }
+        for (name, level, privilege) in &fits {
+            let privilege = privilege.map(|p| p.as_str()).unwrap_or("unknown");
+            println!(
+                "· {name} ({privilege}) judges its fit at {:.0}%",
+                level * 100.0
+            );
         }
     }
     coordinator.settle_traced();
@@ -339,7 +349,15 @@ async fn ask(path: &Path, only: Option<&str>, model: Option<&str>, task: &str) -
         .agent(&winner)
         .map(|a| a.name().to_string())
         .unwrap_or(winner);
-    println!("→ {winner_name} takes it\n");
+    let best = fits.iter().max_by(|a, b| a.1.total_cmp(&b.1));
+    match best {
+        Some((top, level, _)) if assessed && *top != winner_name => println!(
+            "→ {winner_name} takes it: within {:.0} points of {top}'s {:.0}%, and less privileged\n",
+            smesh_agent::agent::CLAIM_MARGIN * 100.0,
+            level * 100.0
+        ),
+        _ => println!("→ {winner_name} takes it\n"),
+    }
 
     let done = coordinator
         .execute_settled(&id)

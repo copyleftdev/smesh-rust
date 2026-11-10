@@ -10,11 +10,13 @@ use tracing::{debug, info, warn};
 
 use crate::affinity::AffinitySource;
 use crate::agent::{
-    AgentAction, AgentConfig, AgentRole, AgentTask, LlmAgent, TaskStatus, TaskType,
+    claim_privilege, AgentAction, AgentConfig, AgentRole, AgentTask, LlmAgent, TaskStatus,
+    TaskType, CLAIM_MARGIN,
 };
 use crate::backend::LlmBackend;
 use crate::claude::{ClaudeClient, ClaudeConfig};
 use crate::openrouter::{OpenRouterClient, OpenRouterConfig};
+use crate::tools::{privilege_rank, Effect};
 use smesh_core::{Field, NodeId, Signal, SignalType};
 
 /// Factory function type for creating backends
@@ -390,12 +392,20 @@ impl AgentCoordinator {
     /// Emit (or refresh) this agent's claim on a task as a signal in the shared
     /// field, so competing agents can sense it and decide whether to yield.
     fn emit_claim_signal(&mut self, task_id: &str, claimer: &str, affinity: f64, task_type: &str) {
+        // The claimer's privilege rides on the claim so every agent can apply
+        // the least-privilege tie-break on its own.
+        let privilege = self
+            .agents
+            .get(claimer)
+            .and_then(LlmAgent::privilege)
+            .map(|p| p.as_str());
         let payload = serde_json::json!({
             "agent_signal_type": "task_claimed",
             "task_id": task_id,
             "claimer": claimer,
             "affinity": affinity,
             "task_type": task_type,
+            "privilege": privilege,
         });
 
         let signal = Signal::builder(SignalType::Coordination)
@@ -418,7 +428,7 @@ impl AgentCoordinator {
             .iter()
             .filter(|(_, s)| {
                 parse_claim(s)
-                    .map(|(tid, c, _)| tid == task_id && c == claimer)
+                    .map(|(tid, c, _, _)| tid == task_id && c == claimer)
                     .unwrap_or(false)
             })
             .map(|(hash, _)| hash.clone())
@@ -546,24 +556,19 @@ impl AgentCoordinator {
     /// deterministically by higher affinity then node id. That tie-break only
     /// ever ranks co-survivors, never the full claimant set.
     pub fn converged_winners(&self) -> Vec<(NodeId, String)> {
-        let mut winners: HashMap<String, (NodeId, f64)> = HashMap::new();
-
+        let mut claims: HashMap<String, Vec<(NodeId, f64, u8)>> = HashMap::new();
         for signal in self.field.signals.values() {
-            if let Some((task_id, claimer, affinity)) = parse_claim(signal) {
-                winners
-                    .entry(task_id)
-                    .and_modify(|best| {
-                        if affinity > best.1 || (affinity == best.1 && claimer < best.0) {
-                            *best = (claimer.clone(), affinity);
-                        }
-                    })
-                    .or_insert((claimer, affinity));
+            if let Some((task_id, claimer, affinity, privilege)) = parse_claim(signal) {
+                claims.entry(task_id).or_default().push((
+                    claimer,
+                    affinity,
+                    privilege_rank(privilege),
+                ));
             }
         }
-
-        winners
+        claims
             .into_iter()
-            .map(|(task_id, (node_id, _))| (node_id, task_id))
+            .filter_map(|(task_id, claims)| pick_winner(&claims).map(|n| (n, task_id)))
             .collect()
     }
 
@@ -662,7 +667,7 @@ impl AgentCoordinator {
 
 /// Parse a `task_claimed` signal into (task_id, claimer, affinity).
 /// Returns `None` for any other signal type or malformed payload.
-fn parse_claim(signal: &Signal) -> Option<(String, NodeId, f64)> {
+fn parse_claim(signal: &Signal) -> Option<(String, NodeId, f64, Option<Effect>)> {
     let payload: serde_json::Value = serde_json::from_slice(&signal.payload).ok()?;
     if payload.get("agent_signal_type")?.as_str()? != "task_claimed" {
         return None;
@@ -670,7 +675,19 @@ fn parse_claim(signal: &Signal) -> Option<(String, NodeId, f64)> {
     let task_id = payload.get("task_id")?.as_str()?.to_string();
     let claimer = payload.get("claimer")?.as_str()?.to_string();
     let affinity = payload.get("affinity")?.as_f64().unwrap_or(0.0);
-    Some((task_id, claimer, affinity))
+    Some((task_id, claimer, affinity, claim_privilege(&payload)))
+}
+
+/// The winner among the claims still standing on one task: of the claims
+/// within [`CLAIM_MARGIN`] of the strongest, the least privileged; then the
+/// strongest; then the lowest node ID, so every reader agrees.
+fn pick_winner(claims: &[(NodeId, f64, u8)]) -> Option<NodeId> {
+    let top = claims.iter().map(|c| c.1).fold(f64::NEG_INFINITY, f64::max);
+    claims
+        .iter()
+        .filter(|c| c.1 >= top - CLAIM_MARGIN - 1e-9)
+        .min_by(|a, b| a.2.cmp(&b.2).then(b.1.total_cmp(&a.1)).then(a.0.cmp(&b.0)))
+        .map(|c| c.0.clone())
 }
 
 #[cfg(test)]
@@ -956,6 +973,159 @@ mod tests {
             .await;
         settle(&mut coord);
         assert_eq!(winner_name(&coord, &id).as_deref(), Some("Equipped"));
+    }
+
+    /// A tool that does nothing, declared with a given effect.
+    fn noop_tool(name: &'static str, effect: crate::tools::Effect) -> Arc<dyn crate::tools::Tool> {
+        use crate::tools::{Effect, Tool, ToolError, ToolOutput};
+        struct Noop(&'static str, Effect);
+        #[async_trait::async_trait]
+        impl Tool for Noop {
+            fn name(&self) -> &str {
+                self.0
+            }
+            fn description(&self) -> &str {
+                "Does nothing."
+            }
+            fn input_schema(&self) -> serde_json::Value {
+                serde_json::json!({ "type": "object" })
+            }
+            fn effect(&self) -> Effect {
+                self.1
+            }
+            async fn call(&self, _: serde_json::Value) -> Result<ToolOutput, ToolError> {
+                Ok(ToolOutput::text(""))
+            }
+        }
+        Arc::new(Noop(name, effect))
+    }
+
+    /// A Librarian (read tools) and a Scribe (write tools) whose assessments
+    /// of a question are `librarian` and `scribe`.
+    async fn librarian_and_scribe(librarian: f64, scribe: f64) -> Option<String> {
+        use crate::tools::{Effect, Toolbelt};
+        let mut coord = empty_mesh().with_affinity_source(Arc::new(KeywordAffinity(vec![
+            ("a librarian", "offsite", librarian),
+            ("a scribe", "offsite", scribe),
+        ])));
+        let reads = Toolbelt::new(Effect::Read)
+            .with_tool(noop_tool("files__read", Effect::Read))
+            .unwrap();
+        let writes = Toolbelt::new(Effect::Write)
+            .with_tool(noop_tool("files__read", Effect::Read))
+            .unwrap()
+            .with_tool(noop_tool("files__write", Effect::Write))
+            .unwrap();
+        coord.add_agent(described("Librarian", "a librarian").with_toolbelt(reads));
+        coord.add_agent(described("Scribe", "a scribe").with_toolbelt(writes));
+        let id = coord
+            .add_task_assessed(TaskDefinition::untyped("Where is the offsite?", 0.5))
+            .await;
+        settle(&mut coord);
+        winner_name(&coord, &id)
+    }
+
+    #[tokio::test]
+    async fn test_near_tie_goes_to_the_least_privileged_agent() {
+        // The scores Jev gave in live runs: the write-capable Scribe a few
+        // points ahead on a read-only question.
+        assert_eq!(
+            librarian_and_scribe(0.79, 0.85).await.as_deref(),
+            Some("Librarian")
+        );
+        assert_eq!(
+            librarian_and_scribe(0.76, 0.82).await.as_deref(),
+            Some("Librarian")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_a_clearly_better_fit_still_wins_whatever_its_privilege() {
+        // Outside the margin the assessment rules, as before.
+        assert_eq!(
+            librarian_and_scribe(0.60, 0.95).await.as_deref(),
+            Some("Scribe")
+        );
+        assert_eq!(
+            librarian_and_scribe(0.95, 0.60).await.as_deref(),
+            Some("Librarian")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_equal_privilege_near_ties_still_go_to_the_stronger_claim() {
+        let mut coord = empty_mesh().with_affinity_source(Arc::new(KeywordAffinity(vec![
+            ("first", "task", 0.80),
+            ("second", "task", 0.86),
+        ])));
+        coord.add_agent(described("First", "the first"));
+        coord.add_agent(described("Second", "the second"));
+        let id = coord
+            .add_task_assessed(TaskDefinition::untyped("do the task", 0.5))
+            .await;
+        settle(&mut coord);
+        assert_eq!(winner_name(&coord, &id).as_deref(), Some("Second"));
+    }
+
+    #[test]
+    fn test_privilege_is_the_strongest_usable_effect() {
+        use crate::tools::{Effect, Toolbelt};
+        assert_eq!(described("A", "a").privilege(), Some(Effect::Read));
+        // Clearance alone does not raise privilege; only tools it can use do.
+        let cleared = Toolbelt::new(Effect::Execute)
+            .with_tool(noop_tool("look", Effect::Read))
+            .unwrap();
+        assert_eq!(
+            described("B", "b").with_toolbelt(cleared).privilege(),
+            Some(Effect::Read)
+        );
+        // A tool above clearance is unusable, so it does not count either.
+        let capped = Toolbelt::new(Effect::Write)
+            .with_tool(noop_tool("write", Effect::Write))
+            .unwrap()
+            .with_tool(noop_tool("shell", Effect::Execute))
+            .unwrap();
+        assert_eq!(
+            described("C", "c").with_toolbelt(capped).privilege(),
+            Some(Effect::Write)
+        );
+    }
+
+    #[test]
+    fn test_pick_winner_ranks_unknown_privilege_last_and_is_order_independent() {
+        let claims = vec![
+            ("remote".to_string(), 0.90, 3),
+            ("local-read".to_string(), 0.84, 0),
+            ("local-exec".to_string(), 0.88, 2),
+            ("far-behind".to_string(), 0.70, 0),
+        ];
+        assert_eq!(pick_winner(&claims).as_deref(), Some("local-read"));
+        let mut reversed = claims.clone();
+        reversed.reverse();
+        assert_eq!(pick_winner(&reversed).as_deref(), Some("local-read"));
+        // Exact ties fall back to the node ID, so every reader agrees.
+        let tie = vec![("b".to_string(), 0.5, 0), ("a".to_string(), 0.5, 0)];
+        assert_eq!(pick_winner(&tie).as_deref(), Some("a"));
+        assert_eq!(pick_winner(&[]), None);
+    }
+
+    #[test]
+    fn test_claim_outranks_is_never_mutual() {
+        use crate::agent::claim_outranks;
+        use crate::tools::Effect::{Execute, Read, Write};
+        let privileges = [Some(Read), Some(Write), Some(Execute), None];
+        for a in [0.5, 0.55, 0.6, 0.65, 0.75] {
+            for b in [0.5, 0.55, 0.6, 0.65, 0.75] {
+                for pa in privileges {
+                    for pb in privileges {
+                        assert!(
+                            !(claim_outranks(a, pa, b, pb) && claim_outranks(b, pb, a, pa)),
+                            "{a} {pa:?} vs {b} {pb:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[tokio::test]

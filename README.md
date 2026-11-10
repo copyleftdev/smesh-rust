@@ -122,18 +122,22 @@ smesh a2a serve --agents 0 --recruit http://other-agent:9000
 Give agents tools from any [MCP](https://modelcontextprotocol.io) server, or write them in Rust.
 Each agent gets its own allowlist and a **clearance** (`read` < `write` < `execute`): a tool above
 it is never offered to the agent and never run for it. An agent's tools count toward which tasks
-it suits, so the agent holding the right tool is the one that claims the task. Every call is
-journaled, and over A2A each call is reported as a status update.
+it suits, so the agent holding the right tool is the one that claims the task. When two agents
+suit a task about equally (within 10 points), the less privileged one takes it: a read-only agent
+answers questions even if a write-capable one scored a little higher. Every call is journaled, and
+over A2A each call is reported as a status update.
 
 ```bash
 smesh tools example > smesh.tools.toml   # a starter config: servers, agents, clearances
 smesh tools list                         # what each agent may use, and what its clearance hides
 smesh tools ask "How many days until the offsite in our files, and where is it?"
-#   → Scribe takes it
-#     ✓ files__search_files {"path":".","pattern":"**/*offsite*"}
+#   · Scribe (write) judges its fit at 81%
+#   · Librarian (read) judges its fit at 76%
+#   → Librarian takes it: within 10 points of Scribe's 81%, and less privileged
+#     ✓ files__list_directory_with_sizes {"path":"…"}
 #     ✓ files__read_text_file {"path":"…/offsite.md"}
 #     ✓ builtin__now {}
-#   24 days (2026-12-04), at the greenhouse on Pier 3.
+#   Offsite date: 2026-12-04, 24 days from today. Venue: the greenhouse on Pier 3.
 
 smesh a2a serve --jev --tools smesh.tools.toml   # the same agents, behind one A2A endpoint
 ```
@@ -200,10 +204,10 @@ with a different key. Pins reset when a node restarts.
 | [`smesh-a2a`](smesh-a2a) | The mesh as an A2A v1.0 agent; remote A2A agents as members; signed Agent Cards |
 | [`smesh-quant`](smesh-quant) | The read-only research mesh, its journal and the site export |
 | [`smesh-world`](smesh-world) · [`smesh-refinery`](smesh-refinery) · [`smesh-ratify`](smesh-ratify) | Signed organizational world models, with a human as merge authority ([design](WORLD-MODEL.md)) |
-| [`smesh-bounty`](smesh-bounty) | Security swarms with agentic tool execution |
+| [`smesh-bounty`](smesh-bounty) | Security swarms; its sandboxed tools are ordinary mesh tools (`bounty_tools`) |
 | [`smesh-cli`](smesh-cli) | The `smesh` binary |
 
-428 tests pass across the workspace (`cargo test --workspace`); one live evaluation against
+438 tests pass across the workspace (`cargo test --workspace`); one live evaluation against
 Jev is `#[ignore]`d and runs on demand.
 
 ## How it differs from an orchestrator

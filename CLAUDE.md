@@ -36,7 +36,7 @@ smesh-rust/
 # Build (release optimized with LTO)
 cargo build --release
 
-# Run all tests (428 tests; 1 live eval is #[ignore]d)
+# Run all tests (438 tests; 1 live eval is #[ignore]d)
 cargo test --workspace
 
 # Run specific crate tests

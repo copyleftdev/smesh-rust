@@ -8,9 +8,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, info};
 
+use crate::backend::LlmProvider;
 use crate::backend::{LlmBackend, LlmError};
 use crate::openrouter::{OpenRouterClient, OpenRouterConfig};
-use crate::tools::{run_with_tools, ToolCall, Toolbelt};
+use crate::tools::{privilege_rank, run_with_tools, Effect, ToolCall, Toolbelt};
 use smesh_core::{Node, Signal};
 
 /// Agent roles that determine skills and behavior
@@ -306,6 +307,32 @@ pub struct LlmAgent {
 /// Most model turns an agent spends calling tools on one task.
 pub const MAX_TOOL_TURNS: usize = 8;
 
+/// Claims within this much affinity of each other count as a near-tie.
+///
+/// Outside it the stronger claim wins, as it always has. Inside it the claim
+/// from the less privileged agent wins (least privilege): when two agents
+/// suit a task about equally, the one that can do less harm takes it.
+pub const CLAIM_MARGIN: f64 = 0.1;
+
+/// Whether a claim (`their` affinity and privilege) beats ours on a task.
+///
+/// Every agent applies the same rule to what it senses, so settlement stays
+/// decentralized: a much stronger claim wins; in a near-tie
+/// ([`CLAIM_MARGIN`]) the less privileged claim wins; otherwise neither
+/// yields.
+pub fn claim_outranks(
+    their_affinity: f64,
+    their_privilege: Option<Effect>,
+    our_affinity: f64,
+    our_privilege: Option<Effect>,
+) -> bool {
+    if their_affinity > our_affinity + CLAIM_MARGIN {
+        return true;
+    }
+    (their_affinity - our_affinity).abs() <= CLAIM_MARGIN
+        && privilege_rank(their_privilege) < privilege_rank(our_privilege)
+}
+
 impl LlmAgent {
     /// Create a new LLM agent with a specific backend
     pub fn new(config: AgentConfig, backend: Arc<dyn LlmBackend>) -> Self {
@@ -336,6 +363,22 @@ impl LlmAgent {
     /// This agent's tools, if it has any.
     pub fn toolbelt(&self) -> Option<&Toolbelt> {
         self.toolbelt.as_ref()
+    }
+
+    /// The most this agent could do to the world, for least-privilege
+    /// tie-breaks: the strongest effect among its usable tools, or
+    /// [`Effect::Read`] for a model with no tools (it can only answer). `None`
+    /// for a remote A2A agent, whose powers this mesh cannot see.
+    pub fn privilege(&self) -> Option<Effect> {
+        if self.backend.provider() == LlmProvider::A2a {
+            return None;
+        }
+        Some(
+            self.toolbelt
+                .as_ref()
+                .and_then(|b| b.usable().map(|t| t.effect()).max())
+                .unwrap_or(Effect::Read),
+        )
     }
 
     /// What this agent does and the tools it can use, in plain language.
@@ -543,14 +586,21 @@ impl LlmAgent {
                 let task_id = payload.get("task_id")?.as_str()?;
                 let claimer = payload.get("claimer")?.as_str()?;
                 let their_affinity = payload.get("affinity")?.as_f64().unwrap_or(0.0);
+                let their_privilege = claim_privilege(&payload);
 
                 // Check for conflict
                 if self.task_queue.contains(&task_id.to_string()) && claimer != self.node.id {
-                    // Back off if they have higher affinity
+                    // Back off from a much stronger claim, or from a near-tie
+                    // with a less privileged agent.
                     let task_type = payload.get("task_type").and_then(|v| v.as_str());
                     let our_affinity = self.affinity_for(task_id, task_type).unwrap_or(0.5);
 
-                    if their_affinity > our_affinity + 0.1 {
+                    if claim_outranks(
+                        their_affinity,
+                        their_privilege,
+                        our_affinity,
+                        self.privilege(),
+                    ) {
                         self.task_queue.retain(|id| id != task_id);
                         // Remember the concession so we don't re-claim next round.
                         if !self.conceded.iter().any(|t| t == task_id) {
@@ -567,6 +617,15 @@ impl LlmAgent {
 
         None
     }
+}
+
+/// The claimer's privilege carried in a claim signal (`None` when absent or
+/// unknown, which ranks highest).
+pub fn claim_privilege(payload: &serde_json::Value) -> Option<Effect> {
+    payload
+        .get("privilege")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse().ok())
 }
 
 /// Actions an agent can take
