@@ -86,3 +86,6 @@ refinery-staged.json*
 .ratify/
 demo-session.*
 *.reviewer.key
+
+# Browser automation screenshots and snapshots
+.playwright-mcp/

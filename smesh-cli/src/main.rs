@@ -17,6 +17,7 @@ mod a2a;
 mod adjudicate;
 mod analysis;
 mod owasp;
+mod quant;
 mod resilience;
 mod review;
 mod showcase;
@@ -58,6 +59,10 @@ enum Commands {
     /// Serve the mesh over A2A (Agent2Agent) v1.0, or talk to A2A agents
     #[command(subcommand)]
     A2a(a2a::A2aCommand),
+
+    /// Read-only quant research mesh over Kalshi, Massive and Kraken
+    #[command(subcommand)]
+    Quant(quant::QuantCommand),
 
     /// Run LLM agent coordination demo
     Agents {
@@ -420,6 +425,7 @@ async fn main() -> Result<()> {
             ticks,
         } => cmd_sim(nodes, &topology, ticks).await,
         Commands::A2a(command) => a2a::run(command).await,
+        Commands::Quant(command) => quant::run(command).await,
         Commands::Agents {
             agents,
             model,

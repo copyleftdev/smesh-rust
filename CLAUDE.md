@@ -16,6 +16,7 @@ smesh-rust/
 ├── smesh-runtime/   # QUIC P2P networking via Quinn
 ├── smesh-agent/     # LLM backends (OpenRouter + Claude), Constitutional AI
 ├── smesh-a2a/       # A2A v1.0: mesh as an A2A server, remote A2A agents as mesh nodes
+├── smesh-quant/     # Read-only quant research mesh: Kalshi + Massive + Kraken, walk-forward
 └── smesh-cli/       # CLI tools, benchmarks, code review, threat analysis
 ```
 
@@ -88,6 +89,15 @@ cargo run --bin smesh -- a2a serve --jev \
   --agent "Translator=a translator between English and Portuguese" \
   --agent "Contracts=a reviewer of commercial contracts who flags risky clauses"
 
+# Read-only quant research mesh (Kalshi + Massive + Kraken), walk-forward,
+# every step journaled to runs/quant-<ts>/timeline.jsonl for visualization
+cargo run --release --bin smesh -- quant run --track both
+cargo run --release --bin smesh -- quant run --track crypto --days 21 --every-hours 3
+
+# Export a run as the website's replay (derived values only) and serve it over A2A
+cargo run --release --bin smesh -- quant export-site --run runs/quant-full --out site/data
+cargo run --release --bin smesh -- a2a serve --jev --agents 0 --quant-run runs/quant-full
+
 # Live routing eval against Jev (needs TYPESAFE_API_KEY)
 cargo test -p smesh-agent --test jev_routing_eval -- --ignored --nocapture
 ```
@@ -125,6 +135,11 @@ cargo test -p smesh-agent --test jev_routing_eval -- --ignored --nocapture
 | Remote A2A agents as mesh nodes | `smesh-a2a/src/remote.rs` |
 | Agent-task affinity from plain language | `smesh-agent/src/affinity.rs` |
 | Jev (TypeSafe System One) client | `smesh-agent/src/jev.rs` |
+| Quant: read-only venue allowlist | `smesh-quant/src/http.rs` |
+| Quant: journal vocabulary for visualization | `smesh-quant/src/log.rs` |
+| Quant: hypotheses as decaying signals | `smesh-quant/src/board.rs` |
+| Quant: research run as an A2A agent (Jev-picked findings) | `smesh-quant/src/agent.rs` |
+| Website (GitHub Pages, replay of a run) | `site/` |
 
 ## Performance Targets
 
@@ -156,6 +171,7 @@ cargo test -p smesh-agent --test jev_routing_eval -- --ignored --nocapture
 | `OPENROUTER_ENV_FILE` | Optional path to a dotenv file for the above (falls back to `~/.creds/openrouter.env`) |
 | `TYPESAFE_API_KEY` | Jev (TypeSafe) key for `--jev` / `JevAffinity` (also read from `~/.creds/typesafe.env` or `$TYPESAFE_ENV_FILE`) |
 | `TYPESAFE_MODEL` | Jev model alias (default: `jev-latest`) |
+| `MASSIVE_API_KEY` | Massive (Polygon) key for `smesh quant` (also read from `~/.creds/massive.env`); Kalshi and Kraken need no key for its read-only data |
 | `RUST_LOG` | Tracing filter (e.g., `smesh=debug`) |
 
 ## Workflow Notes
