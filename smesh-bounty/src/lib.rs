@@ -54,8 +54,8 @@ pub use coordinator::{
 pub use hunter::{BountyHunter, HunterConfig, HunterFinding, HunterMetrics};
 pub use specialization::BountySpecialization;
 pub use tools::{
-    BashTool, FileReadTool, GlobTool, GrepTool, SandboxConfig, Tool, ToolError, ToolExecutor,
-    ToolResult, TrustLevel, WebFetchTool,
+    bounty_tools, BashTool, FileReadTool, GlobTool, GrepTool, SandboxConfig, Tool, ToolError,
+    ToolExecutor, ToolResult, TrustLevel, WebFetchTool,
 };
 pub use web_recon::{run_web_redteam, Arsenal, WebRedTeamResult};
 pub use web_deep::WebFinding;

@@ -13,8 +13,9 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 
 use crate::backend::{
-    GenerateRequest as BackendRequest, GenerateResponse as BackendResponse, LlmBackend, LlmError,
-    LlmProvider,
+    ContentBlock, GenerateRequest as BackendRequest, GenerateRequestV2,
+    GenerateResponse as BackendResponse, GenerateResponseV2, LlmBackend, LlmError, LlmProvider,
+    MessageRole, StopReason, ToolChoice,
 };
 
 /// Default OpenRouter API base URL (OpenAI-compatible).
@@ -144,8 +145,15 @@ struct ChatChoice {
 
 #[derive(Debug, Deserialize)]
 struct ChatResponseMessage {
-    #[serde(default)]
+    /// `null` when the model only calls tools.
+    #[serde(default, deserialize_with = "null_as_empty")]
     content: String,
+}
+
+/// Read a JSON `null` string as empty: OpenAI-compatible APIs send
+/// `"content": null` on a message that only calls tools.
+fn null_as_empty<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Ok(Option::<String>::deserialize(d)?.unwrap_or_default())
 }
 
 #[derive(Debug, Deserialize)]
@@ -444,6 +452,252 @@ impl LlmBackend for OpenRouterClient {
             stop_reason,
         })
     }
+
+    async fn generate_v2(
+        &self,
+        request: GenerateRequestV2,
+    ) -> Result<GenerateResponseV2, LlmError> {
+        self.chat_v2(request).await
+    }
+
+    /// Tool use depends on the model; most current OpenRouter models support it.
+    fn supports_tools(&self) -> bool {
+        true
+    }
+
+    fn supports_multi_turn(&self) -> bool {
+        true
+    }
+}
+
+// ============================================================================
+// Tool use over the OpenAI-compatible API
+// ============================================================================
+
+/// The OpenAI-compatible `messages` for a V2 request.
+///
+/// A [`ContentBlock::ToolUse`] becomes an assistant `tool_calls` entry, and a
+/// [`ContentBlock::ToolResult`] becomes its own `tool` message, which is how
+/// the Chat Completions API pairs a call with its result.
+fn chat_messages(request: &GenerateRequestV2) -> Vec<serde_json::Value> {
+    use serde_json::json;
+    let mut out = Vec::new();
+    if let Some(sys) = request.system.as_deref() {
+        out.push(json!({ "role": "system", "content": sys }));
+    }
+    for message in &request.messages {
+        let text: String = message
+            .content
+            .iter()
+            .filter_map(|c| c.as_text())
+            .collect::<Vec<_>>()
+            .join("");
+        match message.role {
+            MessageRole::Assistant => {
+                let calls: Vec<serde_json::Value> = message
+                    .content
+                    .iter()
+                    .filter_map(|c| match c {
+                        ContentBlock::ToolUse { id, name, input } => Some(json!({
+                            "id": id,
+                            "type": "function",
+                            "function": { "name": name, "arguments": input.to_string() },
+                        })),
+                        _ => None,
+                    })
+                    .collect();
+                if calls.is_empty() {
+                    out.push(json!({ "role": "assistant", "content": text }));
+                } else {
+                    let content = if text.is_empty() {
+                        serde_json::Value::Null
+                    } else {
+                        json!(text)
+                    };
+                    out.push(
+                        json!({ "role": "assistant", "content": content, "tool_calls": calls }),
+                    );
+                }
+            }
+            MessageRole::User => {
+                for block in &message.content {
+                    if let ContentBlock::ToolResult {
+                        tool_use_id,
+                        content,
+                        is_error,
+                    } = block
+                    {
+                        let content = if *is_error {
+                            format!("ERROR: {content}")
+                        } else {
+                            content.clone()
+                        };
+                        out.push(json!({ "role": "tool", "tool_call_id": tool_use_id, "content": content }));
+                    }
+                }
+                if !text.is_empty() {
+                    out.push(json!({ "role": "user", "content": text }));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The full Chat Completions payload for a V2 request.
+fn chat_payload(model: &str, max_tokens: u32, request: &GenerateRequestV2) -> serde_json::Value {
+    use serde_json::json;
+    let mut payload = json!({
+        "model": model,
+        "messages": chat_messages(request),
+        "temperature": request.temperature,
+        "max_tokens": request.max_tokens.min(max_tokens),
+    });
+    if !request.stop_sequences.is_empty() {
+        payload["stop"] = json!(request.stop_sequences);
+    }
+    if !request.tools.is_empty() {
+        payload["tools"] = request
+            .tools
+            .iter()
+            .map(|t| {
+                json!({
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.input_schema,
+                    },
+                })
+            })
+            .collect();
+        payload["tool_choice"] = match &request.tool_choice {
+            ToolChoice::Auto => json!("auto"),
+            ToolChoice::Any => json!("required"),
+            ToolChoice::None => json!("none"),
+            ToolChoice::Tool { name } => {
+                json!({ "type": "function", "function": { "name": name } })
+            }
+        };
+    }
+    payload
+}
+
+/// Content blocks and stop reason from a Chat Completions response.
+fn parse_chat_v2(body: &serde_json::Value) -> Result<(Vec<ContentBlock>, StopReason), LlmError> {
+    let choice = body
+        .get("choices")
+        .and_then(|c| c.get(0))
+        .ok_or_else(|| LlmError::InvalidResponse("no choices returned".to_string()))?;
+    let message = &choice["message"];
+    let mut content = Vec::new();
+    if let Some(text) = message["content"].as_str().filter(|t| !t.is_empty()) {
+        content.push(ContentBlock::Text {
+            text: text.to_string(),
+        });
+    }
+    for call in message["tool_calls"].as_array().into_iter().flatten() {
+        let name = call["function"]["name"].as_str().unwrap_or_default();
+        if name.is_empty() {
+            continue;
+        }
+        let raw = call["function"]["arguments"].as_str().unwrap_or("{}");
+        // Arguments arrive as a JSON string. One that does not parse is
+        // passed through as a string, and the tool reports it as bad input
+        // so the model can correct itself.
+        let input = if raw.trim().is_empty() {
+            serde_json::json!({})
+        } else {
+            serde_json::from_str(raw).unwrap_or_else(|_| serde_json::Value::String(raw.into()))
+        };
+        content.push(ContentBlock::ToolUse {
+            id: call["id"]
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("call_{}", uuid::Uuid::new_v4().simple())),
+            name: name.to_string(),
+            input,
+        });
+    }
+    // Some providers finish a tool call with "stop"; the calls decide it.
+    let stop = if content.iter().any(ContentBlock::is_tool_use) {
+        StopReason::ToolUse
+    } else {
+        match choice["finish_reason"].as_str() {
+            Some("length") => StopReason::MaxTokens,
+            Some("tool_calls") => StopReason::ToolUse,
+            _ => StopReason::EndTurn,
+        }
+    };
+    Ok((content, stop))
+}
+
+impl OpenRouterClient {
+    /// POST a Chat Completions payload and return the JSON body.
+    async fn post_chat(&self, payload: &serde_json::Value) -> Result<serde_json::Value, LlmError> {
+        if self.config.api_key.is_empty() {
+            return Err(LlmError::AuthFailed);
+        }
+        let url = format!("{}/chat/completions", self.config.base_url);
+        let resp = self
+            .client
+            .post(&url)
+            .bearer_auth(&self.config.api_key)
+            .header("HTTP-Referer", "https://github.com/copyleftdev/smesh-rust")
+            .header("X-Title", "SMESH")
+            .json(payload)
+            .send()
+            .await
+            .map_err(|e| LlmError::RequestFailed(e.to_string()))?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(LlmError::AuthFailed);
+        }
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            let retry_after = resp
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(60);
+            return Err(LlmError::RateLimited(Duration::from_secs(retry_after)));
+        }
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(LlmError::GenerationFailed(format!(
+                "Status {}: {}",
+                status, body
+            )));
+        }
+        resp.json()
+            .await
+            .map_err(|e| LlmError::InvalidResponse(e.to_string()))
+    }
+
+    /// Multi-turn generation with tools, over the OpenAI-compatible API.
+    async fn chat_v2(&self, request: GenerateRequestV2) -> Result<GenerateResponseV2, LlmError> {
+        let start = Instant::now();
+        let payload = chat_payload(&self.config.model, self.config.max_tokens, &request);
+        let body = self.post_chat(&payload).await?;
+        // OpenRouter reports some upstream failures as a 200 with an error body.
+        if let Some(err) = body.get("error") {
+            return Err(LlmError::GenerationFailed(err.to_string()));
+        }
+        let (content, stop_reason) = parse_chat_v2(&body)?;
+        Ok(GenerateResponseV2 {
+            content,
+            stop_reason,
+            model: body["model"]
+                .as_str()
+                .filter(|m| !m.is_empty())
+                .unwrap_or(&self.config.model)
+                .to_string(),
+            id: body["id"].as_str().unwrap_or_default().to_string(),
+            input_tokens: body["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32,
+            output_tokens: body["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32,
+            latency: start.elapsed(),
+        })
+    }
 }
 
 /// Resolve an environment variable, falling back to dotenv-style files.
@@ -524,6 +778,114 @@ fn unquote(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tool_request() -> GenerateRequestV2 {
+        use crate::backend::{Message, ToolDefinition};
+        let mut request = GenerateRequestV2::new(vec![
+            Message::user("What is in notes.txt?"),
+            Message {
+                role: MessageRole::Assistant,
+                content: vec![
+                    ContentBlock::Text {
+                        text: "Let me look.".into(),
+                    },
+                    ContentBlock::ToolUse {
+                        id: "call_1".into(),
+                        name: "files__read".into(),
+                        input: serde_json::json!({ "path": "notes.txt" }),
+                    },
+                ],
+            },
+            Message::tool_result("call_1", "no such file", true),
+        ]);
+        request.system = Some("You are careful.".into());
+        request.tools = vec![ToolDefinition::new(
+            "files__read",
+            "Read a file",
+            serde_json::json!({ "type": "object", "properties": { "path": { "type": "string" } } }),
+        )];
+        request
+    }
+
+    #[test]
+    fn a_tool_conversation_maps_onto_chat_completions() {
+        let payload = chat_payload("m", 1000, &tool_request());
+        let msgs = payload["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 4);
+        assert_eq!(msgs[0]["role"], "system");
+        assert_eq!(msgs[1]["role"], "user");
+        assert_eq!(msgs[2]["role"], "assistant");
+        assert_eq!(msgs[2]["content"], "Let me look.");
+        let call = &msgs[2]["tool_calls"][0];
+        assert_eq!(call["id"], "call_1");
+        assert_eq!(call["function"]["name"], "files__read");
+        // Arguments travel as a JSON string, as the API requires.
+        let args: serde_json::Value =
+            serde_json::from_str(call["function"]["arguments"].as_str().unwrap()).unwrap();
+        assert_eq!(args["path"], "notes.txt");
+        assert_eq!(msgs[3]["role"], "tool");
+        assert_eq!(msgs[3]["tool_call_id"], "call_1");
+        assert_eq!(msgs[3]["content"], "ERROR: no such file");
+        assert_eq!(
+            payload["tools"][0]["function"]["parameters"]["type"],
+            "object"
+        );
+        assert_eq!(payload["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn no_tools_sends_no_tool_fields() {
+        let request = GenerateRequestV2::new(vec![crate::backend::Message::user("hi")]);
+        let payload = chat_payload("m", 1000, &request);
+        assert!(payload.get("tools").is_none());
+        assert!(payload.get("tool_choice").is_none());
+    }
+
+    #[test]
+    fn tool_calls_in_a_response_become_tool_use_blocks() {
+        let body = serde_json::json!({
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {
+                    "content": null,
+                    "tool_calls": [
+                        { "id": "a", "type": "function",
+                          "function": { "name": "files__read", "arguments": "{\"path\":\"x\"}" } },
+                        { "id": "b", "type": "function",
+                          "function": { "name": "files__read", "arguments": "not json" } }
+                    ]
+                }
+            }]
+        });
+        let (content, stop) = parse_chat_v2(&body).unwrap();
+        // "stop" with tool calls still means the model wants its tools run.
+        assert_eq!(stop, StopReason::ToolUse);
+        assert_eq!(content.len(), 2);
+        match &content[0] {
+            ContentBlock::ToolUse { id, name, input } => {
+                assert_eq!((id.as_str(), name.as_str()), ("a", "files__read"));
+                assert_eq!(input["path"], "x");
+            }
+            other => panic!("expected a tool use, got {other:?}"),
+        }
+        match &content[1] {
+            ContentBlock::ToolUse { input, .. } => assert_eq!(input, "not json"),
+            other => panic!("expected a tool use, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_plain_answer_ends_the_turn() {
+        let body = serde_json::json!({
+            "choices": [{ "finish_reason": "stop", "message": { "content": "done" } }]
+        });
+        let (content, stop) = parse_chat_v2(&body).unwrap();
+        assert_eq!(stop, StopReason::EndTurn);
+        assert_eq!(content[0].as_text(), Some("done"));
+        let null_content: ChatResponseMessage =
+            serde_json::from_value(serde_json::json!({ "content": null })).unwrap();
+        assert_eq!(null_content.content, "");
+    }
 
     #[test]
     fn test_config_default() {

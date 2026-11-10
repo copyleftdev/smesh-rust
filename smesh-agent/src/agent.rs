@@ -8,8 +8,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, info};
 
+use crate::backend::LlmProvider;
 use crate::backend::{LlmBackend, LlmError};
 use crate::openrouter::{OpenRouterClient, OpenRouterConfig};
+use crate::tools::{privilege_rank, run_with_tools, Effect, ToolCall, Toolbelt};
 use smesh_core::{Node, Signal};
 
 /// Agent roles that determine skills and behavior
@@ -296,6 +298,39 @@ pub struct LlmAgent {
     /// from an affinity source. It takes precedence over the role table, and
     /// is what lets an agent claim a task that has no built-in type.
     pub assessed: HashMap<String, f64>,
+    /// Tools this agent may call, and how far it may go with them.
+    toolbelt: Option<Toolbelt>,
+    /// Tool calls made while executing the most recent task.
+    pub last_tool_calls: Vec<ToolCall>,
+}
+
+/// Most model turns an agent spends calling tools on one task.
+pub const MAX_TOOL_TURNS: usize = 8;
+
+/// Claims within this much affinity of each other count as a near-tie.
+///
+/// Outside it the stronger claim wins, as it always has. Inside it the claim
+/// from the less privileged agent wins (least privilege): when two agents
+/// suit a task about equally, the one that can do less harm takes it.
+pub const CLAIM_MARGIN: f64 = 0.1;
+
+/// Whether a claim (`their` affinity and privilege) beats ours on a task.
+///
+/// Every agent applies the same rule to what it senses, so settlement stays
+/// decentralized: a much stronger claim wins; in a near-tie
+/// ([`CLAIM_MARGIN`]) the less privileged claim wins; otherwise neither
+/// yields.
+pub fn claim_outranks(
+    their_affinity: f64,
+    their_privilege: Option<Effect>,
+    our_affinity: f64,
+    our_privilege: Option<Effect>,
+) -> bool {
+    if their_affinity > our_affinity + CLAIM_MARGIN {
+        return true;
+    }
+    (their_affinity - our_affinity).abs() <= CLAIM_MARGIN
+        && privilege_rank(their_privilege) < privilege_rank(our_privilege)
 }
 
 impl LlmAgent {
@@ -313,6 +348,56 @@ impl LlmAgent {
             results: Vec::new(),
             llm_calls: 0,
             assessed: HashMap::new(),
+            toolbelt: None,
+            last_tool_calls: Vec::new(),
+        }
+    }
+
+    /// Give this agent tools. They count toward which tasks it suits (see
+    /// [`profile`](Self::profile)) and it calls them while executing.
+    pub fn with_toolbelt(mut self, toolbelt: Toolbelt) -> Self {
+        self.toolbelt = Some(toolbelt.for_agent(&self.config.name));
+        self
+    }
+
+    /// This agent's tools, if it has any.
+    pub fn toolbelt(&self) -> Option<&Toolbelt> {
+        self.toolbelt.as_ref()
+    }
+
+    /// The most this agent could do to the world, for least-privilege
+    /// tie-breaks: the strongest effect among its usable tools, or
+    /// [`Effect::Read`] for a model with no tools (it can only answer). `None`
+    /// for a remote A2A agent, whose powers this mesh cannot see.
+    pub fn privilege(&self) -> Option<Effect> {
+        if self.backend.provider() == LlmProvider::A2a {
+            return None;
+        }
+        Some(
+            self.callable_tools()
+                .and_then(|b| b.usable().map(|t| t.effect()).max())
+                .unwrap_or(Effect::Read),
+        )
+    }
+
+    /// The toolbelt, when this agent can actually call it: it has usable
+    /// tools and its backend supports tool use. Routing, privilege and
+    /// execution all go by this, so an agent never claims a task on the
+    /// strength of tools it could not call.
+    fn callable_tools(&self) -> Option<&Toolbelt> {
+        self.toolbelt
+            .as_ref()
+            .filter(|b| b.has_usable() && self.backend.supports_tools())
+    }
+
+    /// What this agent does and the tools it can use, in plain language.
+    /// This is what an affinity source judges it on, so an agent holding the
+    /// right tools for a task is the one that claims it.
+    pub fn profile(&self) -> String {
+        let capability = self.config.capability_text();
+        match self.callable_tools().map(Toolbelt::describe) {
+            Some(tools) if !tools.is_empty() => format!("{capability}. {tools}"),
+            _ => capability.to_string(),
         }
     }
 
@@ -432,8 +517,36 @@ impl LlmAgent {
 
         debug!("Agent {} executing task {}", self.config.name, task.id);
 
-        let result = self.backend.generate_with_system(&prompt, &system).await?;
-        self.llm_calls += 1;
+        self.last_tool_calls.clear();
+        let result = match self.callable_tools() {
+            Some(belt) => {
+                match run_with_tools(
+                    self.backend.as_ref(),
+                    &system,
+                    &prompt,
+                    belt,
+                    MAX_TOOL_TURNS,
+                )
+                .await
+                {
+                    Ok(run) => {
+                        self.llm_calls += run.turns as u64;
+                        self.last_tool_calls = run.calls;
+                        run.text
+                    }
+                    Err(failed) => {
+                        // Keep what already ran (a write, say) so the caller
+                        // can report it alongside the failure.
+                        self.last_tool_calls = failed.calls;
+                        return Err(failed.source);
+                    }
+                }
+            }
+            None => {
+                self.llm_calls += 1;
+                self.backend.generate_with_system(&prompt, &system).await?
+            }
+        };
 
         task.status = TaskStatus::Completed;
         task.result = Some(result.clone());
@@ -488,14 +601,21 @@ impl LlmAgent {
                 let task_id = payload.get("task_id")?.as_str()?;
                 let claimer = payload.get("claimer")?.as_str()?;
                 let their_affinity = payload.get("affinity")?.as_f64().unwrap_or(0.0);
+                let their_privilege = claim_privilege(&payload);
 
                 // Check for conflict
                 if self.task_queue.contains(&task_id.to_string()) && claimer != self.node.id {
-                    // Back off if they have higher affinity
+                    // Back off from a much stronger claim, or from a near-tie
+                    // with a less privileged agent.
                     let task_type = payload.get("task_type").and_then(|v| v.as_str());
                     let our_affinity = self.affinity_for(task_id, task_type).unwrap_or(0.5);
 
-                    if their_affinity > our_affinity + 0.1 {
+                    if claim_outranks(
+                        their_affinity,
+                        their_privilege,
+                        our_affinity,
+                        self.privilege(),
+                    ) {
                         self.task_queue.retain(|id| id != task_id);
                         // Remember the concession so we don't re-claim next round.
                         if !self.conceded.iter().any(|t| t == task_id) {
@@ -512,6 +632,15 @@ impl LlmAgent {
 
         None
     }
+}
+
+/// The claimer's privilege carried in a claim signal (`None` when absent or
+/// unknown, which ranks highest).
+pub fn claim_privilege(payload: &serde_json::Value) -> Option<Effect> {
+    payload
+        .get("privilege")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse().ok())
 }
 
 /// Actions an agent can take

@@ -3,7 +3,6 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
-use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 
 use smesh_agent::{
@@ -22,6 +21,7 @@ mod resilience;
 mod review;
 mod showcase;
 mod swarm;
+mod tools;
 mod viz;
 
 #[derive(Parser)]
@@ -63,6 +63,10 @@ enum Commands {
     /// Read-only quant research mesh over Kalshi, Massive and Kraken
     #[command(subcommand)]
     Quant(quant::QuantCommand),
+
+    /// Give agents tools (MCP servers and built-ins), list them, and try them
+    #[command(subcommand)]
+    Tools(tools::ToolsCommand),
 
     /// Run LLM agent coordination demo
     Agents {
@@ -402,11 +406,19 @@ enum Commands {
     },
 }
 
-fn setup_logging(verbose: bool) {
-    let level = if verbose { Level::DEBUG } else { Level::INFO };
-
+fn setup_logging(verbose: bool, quiet: bool) {
+    // RUST_LOG wins when set. Otherwise the MCP SDK's handshake chatter is
+    // kept to warnings unless --verbose asks for everything, and commands
+    // that print their own progress log only warnings.
+    let default = match (verbose, quiet) {
+        (true, _) => "debug",
+        (false, true) => "warn",
+        (false, false) => "info,rmcp=warn",
+    };
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default));
     FmtSubscriber::builder()
-        .with_max_level(level)
+        .with_env_filter(filter)
         .with_target(false)
         .compact()
         .init();
@@ -415,7 +427,7 @@ fn setup_logging(verbose: bool) {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    setup_logging(cli.verbose);
+    setup_logging(cli.verbose, matches!(cli.command, Commands::Tools(_)));
 
     match cli.command {
         Commands::Status => cmd_status().await,
@@ -426,6 +438,7 @@ async fn main() -> Result<()> {
         } => cmd_sim(nodes, &topology, ticks).await,
         Commands::A2a(command) => a2a::run(command).await,
         Commands::Quant(command) => quant::run(command).await,
+        Commands::Tools(command) => tools::run(command).await,
         Commands::Agents {
             agents,
             model,

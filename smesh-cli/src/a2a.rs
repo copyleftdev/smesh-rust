@@ -65,6 +65,11 @@ pub enum A2aCommand {
         /// File holding a hex Ed25519 seed (32 bytes) to sign the Agent Card with
         #[arg(long)]
         sign_key: Option<std::path::PathBuf>,
+
+        /// Tools config (see `smesh tools example`): adds its agents to the
+        /// mesh, each with its own tools. Needs --jev.
+        #[arg(long)]
+        tools: Option<std::path::PathBuf>,
     },
 
     /// Send a task to an A2A agent and stream what happens
@@ -103,6 +108,7 @@ pub async fn run(command: A2aCommand) -> Result<()> {
             model,
             recruit,
             sign_key,
+            tools,
         } => {
             serve(ServeOptions {
                 listen,
@@ -114,6 +120,7 @@ pub async fn run(command: A2aCommand) -> Result<()> {
                 model,
                 recruit,
                 sign_key,
+                tools,
             })
             .await
         }
@@ -211,6 +218,7 @@ struct ServeOptions {
     model: String,
     recruit: Vec<String>,
     sign_key: Option<std::path::PathBuf>,
+    tools: Option<std::path::PathBuf>,
 }
 
 /// Split `NAME=CAPABILITY`.
@@ -229,9 +237,36 @@ async fn serve(opts: ServeOptions) -> Result<()> {
         .iter()
         .map(|s| parse_described(s))
         .collect::<Result<_>>()?;
+    if opts.tools.is_some() && !opts.jev {
+        bail!("--tools needs --jev: its agents are described in words and matched to tasks by assessment");
+    }
+    let equipped = match &opts.tools {
+        Some(path) => {
+            let equipped = crate::tools::equip(path).await?;
+            for (agent, belt) in &equipped.agents {
+                let usable = belt.definitions().len();
+                println!(
+                    "✓ {} has {usable} tool{} (clearance {})",
+                    agent.name,
+                    if usable == 1 { "" } else { "s" },
+                    belt.clearance()
+                );
+            }
+            Some(equipped)
+        }
+        None => None,
+    };
+    let tooled: Vec<_> = equipped
+        .as_ref()
+        .map(|e| e.agents.clone())
+        .unwrap_or_default();
     let role_agents = opts
         .agents
-        .unwrap_or(if described.is_empty() { 4 } else { 0 });
+        .unwrap_or(if described.is_empty() && tooled.is_empty() {
+            4
+        } else {
+            0
+        });
 
     if opts.quant_run.is_some() && !opts.jev {
         bail!("--quant-run needs --jev: the research agent is routed to, and picks its findings, by Jev");
@@ -264,7 +299,7 @@ async fn serve(opts: ServeOptions) -> Result<()> {
     } else {
         None
     };
-    let local = role_agents + described.len();
+    let local = role_agents + described.len() + tooled.len();
     if local > 0 && OpenRouterConfig::from_env().is_none() {
         bail!("OpenRouter not configured. Set OPENROUTER_API_KEY (or add it to ~/.creds/openrouter.env)");
     }
@@ -309,6 +344,11 @@ async fn serve(opts: ServeOptions) -> Result<()> {
                     .with_capability(capability.clone()),
                 Arc::new(backend),
             ));
+        }
+        for (agent, belt) in &tooled {
+            // Agents with tools use their own model (see `smesh tools example`),
+            // not --model, whose default is too light for multi-step tool use.
+            coordinator.add_agent(crate::tools::llm_agent(agent, belt, None));
         }
         if let Some(backend) = &quant {
             coordinator.add_agent(LlmAgent::new(

@@ -1,21 +1,21 @@
 //! Tool execution layer - gives bounty hunter agents hands
 //!
-//! Inspired by Claude Code's tool dispatch system, each tool has:
-//! - A name and description (for LLM tool-use)
-//! - A JSON schema for input parameters
-//! - An async execute method that returns structured output
-//!
-//! Tools are gated by trust level: low-trust agents get read-only tools,
-//! high-trust agents get execution tools.
+//! Every tool here is a [`smesh_agent::Tool`], the same trait every mesh uses,
+//! holding the [`SandboxConfig`] it runs in. A hunter's [`ToolExecutor`] is a
+//! [`Toolbelt`]: its trust level decides which tools join the belt (as it
+//! always has) and maps to the belt's clearance, so calls go through the
+//! shared gate, timeout and journal. Because they are ordinary tools, any
+//! mesh can hand them to its own agents with [`bounty_tools`].
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use thiserror::Error;
 
+pub use smesh_agent::tools::Tool;
+use smesh_agent::tools::{CallOutcome, Effect, ToolCall, ToolOutput, Toolbelt};
 use smesh_agent::ToolDefinition;
 
 /// Errors from tool execution
@@ -59,30 +59,6 @@ pub struct ToolResult {
     pub is_error: bool,
 }
 
-/// Trait for executable tools
-#[async_trait]
-pub trait Tool: Send + Sync {
-    /// Tool name (must match LLM tool_use name)
-    fn name(&self) -> &str;
-
-    /// Human-readable description
-    fn description(&self) -> &str;
-
-    /// Minimum trust level required
-    fn min_trust_level(&self) -> TrustLevel;
-
-    /// JSON Schema for input parameters
-    fn input_schema(&self) -> Value;
-
-    /// Execute the tool with given input
-    async fn execute(&self, input: Value, sandbox: &SandboxConfig) -> Result<ToolResult, ToolError>;
-
-    /// Convert to LLM ToolDefinition
-    fn to_definition(&self) -> ToolDefinition {
-        ToolDefinition::new(self.name(), self.description(), self.input_schema())
-    }
-}
-
 /// Sandbox configuration constraining tool execution
 #[derive(Debug, Clone)]
 pub struct SandboxConfig {
@@ -103,7 +79,7 @@ impl Default for SandboxConfig {
         Self {
             root_dir: PathBuf::from("."),
             max_output_bytes: 64 * 1024, // 64KB
-            command_timeout_ms: 30_000,   // 30s
+            command_timeout_ms: 30_000,  // 30s
             blocked_commands: vec![
                 "rm -rf /".into(),
                 "mkfs".into(),
@@ -174,24 +150,70 @@ impl SandboxConfig {
 // Tool Implementations
 // ============================================================================
 
-/// Read a file's contents
-pub struct FileReadTool;
+/// Implement the shared [`Tool`] trait for a bounty tool whose inherent
+/// `tool_name`, `about`, `schema` and `run` hold its behaviour.
+macro_rules! shared_tool {
+    ($t:ty, $effect:expr) => {
+        #[async_trait]
+        impl Tool for $t {
+            fn name(&self) -> &str {
+                self.tool_name()
+            }
+            fn description(&self) -> &str {
+                self.about()
+            }
+            fn input_schema(&self) -> Value {
+                self.schema()
+            }
+            fn effect(&self) -> Effect {
+                $effect
+            }
+            async fn call(
+                &self,
+                input: Value,
+            ) -> Result<ToolOutput, smesh_agent::tools::ToolError> {
+                let result = self.run(input, &self.sandbox).await.map_err(|e| match e {
+                    ToolError::InvalidInput(m) => smesh_agent::tools::ToolError::InvalidInput(m),
+                    other => smesh_agent::tools::ToolError::Failed(other.to_string()),
+                })?;
+                Ok(if result.is_error {
+                    ToolOutput::error(result.content)
+                } else {
+                    ToolOutput::text(result.content)
+                })
+            }
+        }
+    };
+}
 
-#[async_trait]
-impl Tool for FileReadTool {
-    fn name(&self) -> &str {
+/// Read a file's contents
+pub struct FileReadTool {
+    sandbox: Arc<SandboxConfig>,
+}
+
+impl FileReadTool {
+    /// This tool, confined to `sandbox`.
+    pub fn new(sandbox: Arc<SandboxConfig>) -> Self {
+        Self { sandbox }
+    }
+}
+
+shared_tool!(FileReadTool, Effect::Read);
+
+impl FileReadTool {
+    fn tool_name(&self) -> &str {
         "file_read"
     }
 
-    fn description(&self) -> &str {
+    fn about(&self) -> &str {
         "Read a file's contents. Supports offset and limit for large files."
     }
 
-    fn min_trust_level(&self) -> TrustLevel {
+    fn min_trust_level() -> TrustLevel {
         TrustLevel::ReadOnly
     }
 
-    fn input_schema(&self) -> Value {
+    fn schema(&self) -> Value {
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -212,7 +234,7 @@ impl Tool for FileReadTool {
         })
     }
 
-    async fn execute(&self, input: Value, sandbox: &SandboxConfig) -> Result<ToolResult, ToolError> {
+    async fn run(&self, input: Value, sandbox: &SandboxConfig) -> Result<ToolResult, ToolError> {
         let path_str = input["path"]
             .as_str()
             .ok_or_else(|| ToolError::InvalidInput("path is required".into()))?;
@@ -226,9 +248,9 @@ impl Tool for FileReadTool {
             )));
         }
 
-        let content = tokio::fs::read_to_string(&full_path)
-            .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read {}: {}", path_str, e)))?;
+        let content = tokio::fs::read_to_string(&full_path).await.map_err(|e| {
+            ToolError::ExecutionFailed(format!("Failed to read {}: {}", path_str, e))
+        })?;
 
         let offset = input["offset"].as_u64().unwrap_or(0) as usize;
         let limit = input["limit"].as_u64().unwrap_or(500) as usize;
@@ -252,7 +274,7 @@ impl Tool for FileReadTool {
         };
 
         Ok(ToolResult {
-            tool_name: self.name().into(),
+            tool_name: self.tool_name().into(),
             success: true,
             content: output,
             is_error: false,
@@ -261,23 +283,33 @@ impl Tool for FileReadTool {
 }
 
 /// Search file contents with regex
-pub struct GrepTool;
+pub struct GrepTool {
+    sandbox: Arc<SandboxConfig>,
+}
 
-#[async_trait]
-impl Tool for GrepTool {
-    fn name(&self) -> &str {
+impl GrepTool {
+    /// This tool, confined to `sandbox`.
+    pub fn new(sandbox: Arc<SandboxConfig>) -> Self {
+        Self { sandbox }
+    }
+}
+
+shared_tool!(GrepTool, Effect::Read);
+
+impl GrepTool {
+    fn tool_name(&self) -> &str {
         "grep"
     }
 
-    fn description(&self) -> &str {
+    fn about(&self) -> &str {
         "Search file contents using regex. Returns matching lines with file paths and line numbers."
     }
 
-    fn min_trust_level(&self) -> TrustLevel {
+    fn min_trust_level() -> TrustLevel {
         TrustLevel::ReadOnly
     }
 
-    fn input_schema(&self) -> Value {
+    fn schema(&self) -> Value {
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -302,7 +334,7 @@ impl Tool for GrepTool {
         })
     }
 
-    async fn execute(&self, input: Value, sandbox: &SandboxConfig) -> Result<ToolResult, ToolError> {
+    async fn run(&self, input: Value, sandbox: &SandboxConfig) -> Result<ToolResult, ToolError> {
         let pattern_str = input["pattern"]
             .as_str()
             .ok_or_else(|| ToolError::InvalidInput("pattern is required".into()))?;
@@ -389,7 +421,7 @@ impl Tool for GrepTool {
         };
 
         Ok(ToolResult {
-            tool_name: self.name().into(),
+            tool_name: self.tool_name().into(),
             success: true,
             content: output,
             is_error: false,
@@ -398,23 +430,33 @@ impl Tool for GrepTool {
 }
 
 /// Find files by glob pattern
-pub struct GlobTool;
+pub struct GlobTool {
+    sandbox: Arc<SandboxConfig>,
+}
 
-#[async_trait]
-impl Tool for GlobTool {
-    fn name(&self) -> &str {
+impl GlobTool {
+    /// This tool, confined to `sandbox`.
+    pub fn new(sandbox: Arc<SandboxConfig>) -> Self {
+        Self { sandbox }
+    }
+}
+
+shared_tool!(GlobTool, Effect::Read);
+
+impl GlobTool {
+    fn tool_name(&self) -> &str {
         "glob"
     }
 
-    fn description(&self) -> &str {
+    fn about(&self) -> &str {
         "Find files matching a glob pattern. Returns file paths sorted by modification time."
     }
 
-    fn min_trust_level(&self) -> TrustLevel {
+    fn min_trust_level() -> TrustLevel {
         TrustLevel::ReadOnly
     }
 
-    fn input_schema(&self) -> Value {
+    fn schema(&self) -> Value {
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -431,7 +473,7 @@ impl Tool for GlobTool {
         })
     }
 
-    async fn execute(&self, input: Value, sandbox: &SandboxConfig) -> Result<ToolResult, ToolError> {
+    async fn run(&self, input: Value, sandbox: &SandboxConfig) -> Result<ToolResult, ToolError> {
         let pattern = input["pattern"]
             .as_str()
             .ok_or_else(|| ToolError::InvalidInput("pattern is required".into()))?;
@@ -446,21 +488,19 @@ impl Tool for GlobTool {
 
         let mut files: Vec<(PathBuf, std::time::SystemTime)> = Vec::new();
 
-        for entry in glob::glob(&full_pattern).map_err(|e| {
-            ToolError::InvalidInput(format!("Invalid glob pattern: {}", e))
-        })? {
-            if let Ok(path) = entry {
-                if path.is_file() && sandbox.is_allowed_path(&path) {
-                    let mtime = std::fs::metadata(&path)
-                        .and_then(|m| m.modified())
-                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                    files.push((path, mtime));
-                }
+        let matches = glob::glob(&full_pattern)
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid glob pattern: {}", e)))?;
+        for path in matches.flatten() {
+            if path.is_file() && sandbox.is_allowed_path(&path) {
+                let mtime = std::fs::metadata(&path)
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                files.push((path, mtime));
             }
         }
 
         // Sort by modification time (newest first)
-        files.sort_by(|a, b| b.1.cmp(&a.1));
+        files.sort_by_key(|f| std::cmp::Reverse(f.1));
 
         let output: Vec<String> = files
             .iter()
@@ -480,7 +520,7 @@ impl Tool for GlobTool {
         };
 
         Ok(ToolResult {
-            tool_name: self.name().into(),
+            tool_name: self.tool_name().into(),
             success: true,
             content: result,
             is_error: false,
@@ -489,23 +529,33 @@ impl Tool for GlobTool {
 }
 
 /// Execute shell commands (sandboxed)
-pub struct BashTool;
+pub struct BashTool {
+    sandbox: Arc<SandboxConfig>,
+}
 
-#[async_trait]
-impl Tool for BashTool {
-    fn name(&self) -> &str {
+impl BashTool {
+    /// This tool, confined to `sandbox`.
+    pub fn new(sandbox: Arc<SandboxConfig>) -> Self {
+        Self { sandbox }
+    }
+}
+
+shared_tool!(BashTool, Effect::Execute);
+
+impl BashTool {
+    fn tool_name(&self) -> &str {
         "bash"
     }
 
-    fn description(&self) -> &str {
+    fn about(&self) -> &str {
         "Execute a shell command. Use for running security tools (nmap, nikto, cargo-audit, npm audit, etc.) and system commands."
     }
 
-    fn min_trust_level(&self) -> TrustLevel {
+    fn min_trust_level() -> TrustLevel {
         TrustLevel::Standard
     }
 
-    fn input_schema(&self) -> Value {
+    fn schema(&self) -> Value {
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -522,7 +572,7 @@ impl Tool for BashTool {
         })
     }
 
-    async fn execute(&self, input: Value, sandbox: &SandboxConfig) -> Result<ToolResult, ToolError> {
+    async fn run(&self, input: Value, sandbox: &SandboxConfig) -> Result<ToolResult, ToolError> {
         let command = input["command"]
             .as_str()
             .ok_or_else(|| ToolError::InvalidInput("command is required".into()))?;
@@ -577,7 +627,7 @@ impl Tool for BashTool {
         }
 
         Ok(ToolResult {
-            tool_name: self.name().into(),
+            tool_name: self.tool_name().into(),
             success: output.status.success(),
             content,
             is_error: !output.status.success(),
@@ -586,23 +636,33 @@ impl Tool for BashTool {
 }
 
 /// Fetch a URL (for checking endpoints, downloading CVE data, etc.)
-pub struct WebFetchTool;
+pub struct WebFetchTool {
+    sandbox: Arc<SandboxConfig>,
+}
 
-#[async_trait]
-impl Tool for WebFetchTool {
-    fn name(&self) -> &str {
+impl WebFetchTool {
+    /// This tool, confined to `sandbox`.
+    pub fn new(sandbox: Arc<SandboxConfig>) -> Self {
+        Self { sandbox }
+    }
+}
+
+shared_tool!(WebFetchTool, Effect::Read);
+
+impl WebFetchTool {
+    fn tool_name(&self) -> &str {
         "web_fetch"
     }
 
-    fn description(&self) -> &str {
+    fn about(&self) -> &str {
         "Fetch content from a URL. Useful for checking endpoints, downloading CVE references, and verifying external resources."
     }
 
-    fn min_trust_level(&self) -> TrustLevel {
+    fn min_trust_level() -> TrustLevel {
         TrustLevel::Standard
     }
 
-    fn input_schema(&self) -> Value {
+    fn schema(&self) -> Value {
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -624,7 +684,7 @@ impl Tool for WebFetchTool {
         })
     }
 
-    async fn execute(&self, input: Value, sandbox: &SandboxConfig) -> Result<ToolResult, ToolError> {
+    async fn run(&self, input: Value, sandbox: &SandboxConfig) -> Result<ToolResult, ToolError> {
         let url = input["url"]
             .as_str()
             .ok_or_else(|| ToolError::InvalidInput("url is required".into()))?;
@@ -689,7 +749,7 @@ impl Tool for WebFetchTool {
         );
 
         Ok(ToolResult {
-            tool_name: self.name().into(),
+            tool_name: self.tool_name().into(),
             success: status.is_success(),
             content,
             is_error: status.is_server_error(),
@@ -701,66 +761,108 @@ impl Tool for WebFetchTool {
 // Tool Executor
 // ============================================================================
 
-/// Manages available tools and executes them with trust gating
+/// The clearance a trust level grants on the shared toolbelt.
+impl TrustLevel {
+    /// The most this trust level may do. Which tools an agent holds is still
+    /// decided per tool by [`bounty_tools`]; this is the gate behind it.
+    pub fn clearance(self) -> Effect {
+        match self {
+            TrustLevel::ReadOnly => Effect::Read,
+            TrustLevel::Standard | TrustLevel::Elevated | TrustLevel::Full => Effect::Execute,
+        }
+    }
+}
+
+/// Every bounty tool confined to `sandbox`, with the trust level it needs.
+pub fn bounty_tools(sandbox: Arc<SandboxConfig>) -> Vec<(Arc<dyn Tool>, TrustLevel)> {
+    vec![
+        (
+            Arc::new(FileReadTool::new(Arc::clone(&sandbox))),
+            FileReadTool::min_trust_level(),
+        ),
+        (
+            Arc::new(GrepTool::new(Arc::clone(&sandbox))),
+            GrepTool::min_trust_level(),
+        ),
+        (
+            Arc::new(GlobTool::new(Arc::clone(&sandbox))),
+            GlobTool::min_trust_level(),
+        ),
+        (
+            Arc::new(BashTool::new(Arc::clone(&sandbox))),
+            BashTool::min_trust_level(),
+        ),
+        (
+            Arc::new(WebFetchTool::new(sandbox)),
+            WebFetchTool::min_trust_level(),
+        ),
+    ]
+}
+
+/// A hunter's tools: a shared [`Toolbelt`] holding the bounty tools its trust
+/// level allows.
 pub struct ToolExecutor {
-    tools: HashMap<String, Arc<dyn Tool>>,
-    sandbox: SandboxConfig,
+    belt: Toolbelt,
+    sandbox: Arc<SandboxConfig>,
     trust_level: TrustLevel,
 }
 
 impl ToolExecutor {
-    /// Create a new tool executor with default tools
+    /// The tools `trust_level` allows, confined to `sandbox`.
     pub fn new(sandbox: SandboxConfig, trust_level: TrustLevel) -> Self {
-        let mut tools: HashMap<String, Arc<dyn Tool>> = HashMap::new();
-
-        let all_tools: Vec<Arc<dyn Tool>> = vec![
-            Arc::new(FileReadTool),
-            Arc::new(GrepTool),
-            Arc::new(GlobTool),
-            Arc::new(BashTool),
-            Arc::new(WebFetchTool),
-        ];
-
-        for tool in all_tools {
-            if tool.min_trust_level() <= trust_level {
-                tools.insert(tool.name().to_string(), tool);
-            }
-        }
-
-        Self {
-            tools,
+        let sandbox = Arc::new(sandbox);
+        let mut executor = Self {
+            belt: Toolbelt::new(trust_level.clearance()).with_timeout(
+                std::time::Duration::from_millis(sandbox.command_timeout_ms.saturating_add(5_000)),
+            ),
             sandbox,
             trust_level,
+        };
+        executor.add_allowed();
+        executor
+    }
+
+    /// Add every tool the current trust level allows that is not yet held.
+    fn add_allowed(&mut self) {
+        for (tool, min) in bounty_tools(Arc::clone(&self.sandbox)) {
+            if min <= self.trust_level && !self.has_tool(tool.name()) {
+                // Names are fixed and distinct, so adding cannot fail.
+                let _ = self.belt.add(tool);
+            }
         }
     }
 
     /// Get tool definitions for LLM (only tools this executor can access)
     pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
-        self.tools.values().map(|t| t.to_definition()).collect()
+        self.belt.definitions()
     }
 
-    /// Execute a tool by name
+    /// Execute a tool by name, through the toolbelt's gate and journal.
     pub async fn execute(&self, tool_name: &str, input: Value) -> Result<ToolResult, ToolError> {
-        let tool = self
-            .tools
-            .get(tool_name)
-            .ok_or_else(|| ToolError::NotFound(tool_name.into()))?;
-
-        if tool.min_trust_level() > self.trust_level {
-            return Err(ToolError::PermissionDenied(format!(
-                "Tool {} requires {:?} trust, agent has {:?}",
-                tool_name,
-                tool.min_trust_level(),
-                self.trust_level
-            )));
+        let call = self.belt.call(tool_name, input).await;
+        match call.outcome {
+            CallOutcome::Refused if call.effect.is_none() => {
+                Err(ToolError::NotFound(tool_name.into()))
+            }
+            CallOutcome::Refused => Err(ToolError::PermissionDenied(call.output)),
+            CallOutcome::Error => Ok(ToolResult {
+                tool_name: tool_name.into(),
+                success: false,
+                content: call.output,
+                is_error: true,
+            }),
+            CallOutcome::Ok => Ok(ToolResult {
+                tool_name: tool_name.into(),
+                success: true,
+                content: call.output,
+                is_error: false,
+            }),
         }
-
-        tool.execute(input, &self.sandbox).await
     }
 
     /// Check if a tool is available
     pub fn has_tool(&self, name: &str) -> bool {
-        self.tools.contains_key(name)
+        self.belt.tools().iter().any(|t| t.name() == name)
     }
 
     /// Get current trust level
@@ -768,27 +870,22 @@ impl ToolExecutor {
         self.trust_level
     }
 
-    /// Upgrade trust level (enables more tools)
+    /// Every call made so far.
+    pub fn journal(&self) -> Vec<ToolCall> {
+        self.belt.journal()
+    }
+
+    /// The underlying toolbelt, to hand these tools to a mesh agent.
+    pub fn toolbelt(&self) -> &Toolbelt {
+        &self.belt
+    }
+
+    /// Upgrade trust level (enables more tools). The journal is kept.
     pub fn upgrade_trust(&mut self, new_level: TrustLevel) {
         if new_level > self.trust_level {
             self.trust_level = new_level;
-
-            // Re-add tools that are now accessible
-            let new_tools: Vec<Arc<dyn Tool>> = vec![
-                Arc::new(FileReadTool),
-                Arc::new(GrepTool),
-                Arc::new(GlobTool),
-                Arc::new(BashTool),
-                Arc::new(WebFetchTool),
-            ];
-
-            for tool in new_tools {
-                if tool.min_trust_level() <= self.trust_level {
-                    self.tools
-                        .entry(tool.name().to_string())
-                        .or_insert(tool);
-                }
-            }
+            self.belt.set_clearance(new_level.clearance());
+            self.add_allowed();
         }
     }
 }
@@ -797,7 +894,7 @@ impl std::fmt::Debug for ToolExecutor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ToolExecutor")
             .field("trust_level", &self.trust_level)
-            .field("tools", &self.tools.keys().collect::<Vec<_>>())
+            .field("toolbelt", &self.belt)
             .finish()
     }
 }
@@ -845,6 +942,130 @@ mod tests {
         assert!(sandbox.is_blocked_command("sudo mkfs.ext4 /dev/sda"));
         assert!(!sandbox.is_blocked_command("cargo audit"));
         assert!(!sandbox.is_blocked_command("grep -r password ."));
+    }
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("smesh-bounty-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("app.py"), "password = 'hunter2'\nprint('ok')\n").unwrap();
+        dir
+    }
+
+    #[test]
+    fn bounty_tools_declare_what_they_can_do() {
+        let effects: Vec<(String, Effect)> = bounty_tools(Arc::new(SandboxConfig::default()))
+            .into_iter()
+            .map(|(t, _)| (t.name().to_string(), t.effect()))
+            .collect();
+        assert!(effects.contains(&("file_read".into(), Effect::Read)));
+        assert!(effects.contains(&("web_fetch".into(), Effect::Read)));
+        assert!(effects.contains(&("bash".into(), Effect::Execute)));
+        assert_eq!(TrustLevel::ReadOnly.clearance(), Effect::Read);
+        assert_eq!(TrustLevel::Standard.clearance(), Effect::Execute);
+    }
+
+    #[tokio::test]
+    async fn calls_run_through_the_shared_toolbelt_and_are_journaled() {
+        let dir = scratch("journal");
+        let executor = ToolExecutor::new(SandboxConfig::rooted(&dir), TrustLevel::ReadOnly);
+
+        let read = executor
+            .execute("file_read", serde_json::json!({ "path": "app.py" }))
+            .await
+            .unwrap();
+        assert!(
+            read.success && read.content.contains("hunter2"),
+            "{}",
+            read.content
+        );
+
+        let grep = executor
+            .execute("grep", serde_json::json!({ "pattern": "password" }))
+            .await
+            .unwrap();
+        assert!(grep.content.contains("app.py:1:"), "{}", grep.content);
+
+        // The sandbox still confines paths; its refusal is now a tool error.
+        let escape = executor
+            .execute(
+                "file_read",
+                serde_json::json!({ "path": "../../etc/passwd" }),
+            )
+            .await
+            .unwrap();
+        assert!(
+            escape.is_error && escape.content.contains("outside sandbox"),
+            "{}",
+            escape.content
+        );
+
+        // A tool the trust level never granted is unknown to this agent.
+        assert!(matches!(
+            executor
+                .execute("bash", serde_json::json!({ "command": "id" }))
+                .await,
+            Err(ToolError::NotFound(_))
+        ));
+
+        let journal = executor.journal();
+        assert_eq!(journal.len(), 4);
+        assert_eq!(journal[0].outcome, CallOutcome::Ok);
+        assert_eq!(journal[2].outcome, CallOutcome::Error);
+        assert_eq!(journal[3].outcome, CallOutcome::Refused);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn earning_trust_adds_tools_and_keeps_the_journal() {
+        let dir = scratch("upgrade");
+        let mut executor = ToolExecutor::new(SandboxConfig::rooted(&dir), TrustLevel::ReadOnly);
+        executor
+            .execute("glob", serde_json::json!({ "pattern": "*.py" }))
+            .await
+            .unwrap();
+        executor.upgrade_trust(TrustLevel::Standard);
+        assert!(executor.has_tool("bash"));
+        let ran = executor
+            .execute("bash", serde_json::json!({ "command": "echo hi" }))
+            .await
+            .unwrap();
+        assert_eq!(ran.content.trim(), "hi");
+        let blocked = executor
+            .execute("bash", serde_json::json!({ "command": "rm -rf /" }))
+            .await
+            .unwrap();
+        assert!(
+            blocked.is_error && blocked.content.contains("blocked"),
+            "{}",
+            blocked.content
+        );
+        assert_eq!(
+            executor.journal().len(),
+            3,
+            "the journal survives the upgrade"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn any_mesh_agent_can_hold_bounty_tools_under_its_own_clearance() {
+        let dir = scratch("mesh");
+        let mut belt = Toolbelt::new(Effect::Read);
+        for (tool, _) in bounty_tools(Arc::new(SandboxConfig::rooted(&dir))) {
+            belt.add(tool).unwrap();
+        }
+        let offered: Vec<String> = belt.definitions().into_iter().map(|d| d.name).collect();
+        assert!(offered.contains(&"grep".to_string()));
+        assert!(
+            !offered.contains(&"bash".to_string()),
+            "execute is above read clearance"
+        );
+        let refused = belt
+            .call("bash", serde_json::json!({ "command": "id" }))
+            .await;
+        assert_eq!(refused.outcome, CallOutcome::Refused);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
